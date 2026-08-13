@@ -8,9 +8,14 @@ The first app here, `last-fm/now-playing`, is documented below in full as a work
 
 ```
 <integration>/<app-name>/     # e.g. last-fm/now-playing/ — one folder per app
-.github/workflows/
-  deploy-app.yml               # reusable workflow: build, push to GAR, deploy to Cloud Run
-  <app-name>.yml                # thin per-app caller onto deploy-app.yml, path-filtered
+.github/
+  dependabot.yml                # one npm + docker entry per app, plus github-actions
+  workflows/
+    deploy-app.yml               # reusable: build, scan, push to GAR, deploy to Cloud Run
+    lint-app.yml                 # reusable: format/lint/typecheck/audit
+    <app-name>.yml                # thin per-app caller — lint on PR, deploy on push to main
+    codeql.yml                   # repo-wide, not per-app
+    dependency-review.yml        # repo-wide, not per-app
 ```
 
 Each app folder is a self-contained Node/TypeScript project with its own `package.json`, `package-lock.json`, and `Dockerfile` — deliberately *not* an npm workspace. That was tried first and reverted: workspaces hoist `node_modules`/the lockfile to the repo root, which breaks a per-app-folder Docker build context. Revisit that decision only once a second app creates a real shared-tooling need.
@@ -82,8 +87,23 @@ Two-stage build — `npm install && npm run build` (tsc) in a builder stage, the
 
 ### CI/CD
 
-- **`.github/workflows/deploy-app.yml`** — reusable (`workflow_call`), parameterized by app path, service name, region, GAR repo, WIF provider, and deploy service account. Authenticates via WIF, `docker build`/`push`s to GAR, then `gcloud run deploy --image=...`.
-- **`.github/workflows/last-fm-now-playing.yml`** — a thin caller: path-filtered to `last-fm/now-playing/**`, supplies this app's specific values to the reusable workflow. This is the file you'd copy (not the reusable one) to add a new app.
+- **`.github/workflows/deploy-app.yml`** — reusable (`workflow_call`), parameterized by app path, service name, region, GAR repo, WIF provider, and deploy service account. Authenticates via WIF, builds the image, scans it (Trivy — see below), pushes to GAR, then `gcloud run deploy --image=...`.
+- **`.github/workflows/last-fm-now-playing.yml`** — a thin caller, path-filtered to `last-fm/now-playing/**`: on a PR it calls `lint-app.yml`; on push to `main` it calls `deploy-app.yml` with this app's specific values. This is the file you'd copy (not either reusable workflow) to add a new app.
+
+### Linting and security
+
+Everything below is repo-wide policy, not something specific to this one app — the same checks apply automatically to any new app folder that follows the pattern.
+
+| Check | Where | Runs |
+| --- | --- | --- |
+| Format (Prettier), lint (ESLint), typecheck (`tsc --noEmit`) | `lint-app.yml`, called per-app | Every PR touching that app |
+| `npm audit` (fails on high/critical) | `lint-app.yml` | Every PR touching that app |
+| Container image scan (Trivy, fails on high/critical, fixed vulnerabilities only) | `deploy-app.yml`, after build, before push | Every deploy — a vulnerable image never reaches GAR or Cloud Run |
+| [CodeQL](https://codeql.github.com/) static analysis | `codeql.yml` | Push/PR to `main`, plus a weekly scheduled scan so newly-disclosed CVEs in unchanged code still get caught |
+| [Dependency review](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review) | `dependency-review.yml` | Every PR — flags newly-introduced vulnerable dependencies in the diff itself |
+| [Dependabot](https://docs.github.com/en/code-security/dependabot) version updates | `dependabot.yml` | Weekly, opens PRs for outdated npm packages, base Docker image, and GitHub Actions versions |
+
+A new app's own `package.json` needs `format:check`, `lint`, and `typecheck` npm scripts for `lint-app.yml` to call — copy `last-fm/now-playing`'s `eslint.config.mjs`, `.prettierrc.json`, and `package.json` scripts as the starting point.
 
 ### Infrastructure
 
@@ -112,7 +132,8 @@ docker run -p 8080:8080 -e LASTFM_API_KEY=... -e LASTFM_USERNAME=... now-playing
 
 ## Adding a new app
 
-1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile.
-2. Copy `last-fm-now-playing.yml` as `<app-name>.yml`, update the path filter and the `with:` inputs (service name, GAR repo, deploy service account).
-3. In `elliotx-website-terraform`, add a new subfolder (own Terraform state, matching the "keep infra separate" convention) that calls `modules/cloud-run-service` and `modules/github-ci-service-account` — pointing at the *existing* shared WIF pool by name rather than creating a new one.
-4. First `terraform apply` stands up the service on a placeholder image; the first push to the new app's folder replaces it with the real thing.
+1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile, plus `eslint.config.mjs` and `.prettierrc.json` copied from `last-fm/now-playing`.
+2. Copy `last-fm-now-playing.yml` as `<app-name>.yml`, update the path filter and the `with:` inputs (service name, GAR repo, deploy service account) — this one file wires up both lint-on-PR and deploy-on-push.
+3. Add a `package-ecosystem: npm` and a `package-ecosystem: docker` entry for the new app's directory in `.github/dependabot.yml`. CodeQL and dependency review are already repo-wide — nothing to add there.
+4. In `elliotx-website-terraform`, add a new subfolder (own Terraform state, matching the "keep infra separate" convention) that calls `modules/cloud-run-service` and `modules/github-ci-service-account` — pointing at the *existing* shared WIF pool by name rather than creating a new one.
+5. First `terraform apply` stands up the service on a placeholder image; the first push to the new app's folder replaces it with the real thing.

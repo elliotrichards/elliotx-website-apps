@@ -1,6 +1,11 @@
-name: Deploy last-fm-now-playing
+name: last-fm-now-playing
 
 on:
+  pull_request:
+    paths:
+      - "last-fm/now-playing/**"
+      - ".github/workflows/last-fm-now-playing.yml"
+      - ".github/workflows/lint-app.yml"
   push:
     branches: [main]
     paths:
@@ -9,7 +14,14 @@ on:
       - ".github/workflows/deploy-app.yml"
 
 jobs:
+  lint:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/lint-app.yml
+    with:
+      app_path: last-fm/now-playing
+
   deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/deploy-app.yml
     permissions:
       contents: read

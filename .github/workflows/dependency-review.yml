@@ -1,0 +1,21 @@
+name: Dependency review
+
+# Flags newly-introduced dependencies with known vulnerabilities directly on
+# the PR diff — catches them before merge, complementing Dependabot (which
+# only opens PRs for issues in what's already merged) and CodeQL (source
+# code, not third-party packages).
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
