@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # One entry per app — add a new one here alongside each new app folder.
+  - package-ecosystem: npm
+    directory: /last-fm/now-playing
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  - package-ecosystem: docker
+    directory: /last-fm/now-playing
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

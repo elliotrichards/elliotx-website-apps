@@ -1,0 +1,36 @@
+name: Lint app
+
+# Reusable workflow: format check, lint, typecheck, and a dependency
+# vulnerability audit for one app. Called by each app's own caller workflow
+# on pull requests — see last-fm-now-playing.yml.
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: Path to the app's directory
+        required: true
+        type: string
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.app_path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ inputs.app_path }}/package-lock.json
+
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+
+      # Fails the job on high/critical vulnerabilities so they can't merge
+      # silently; moderate-and-below just show up in the log.
+      - run: npm audit --audit-level=high

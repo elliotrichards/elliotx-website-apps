@@ -52,13 +52,27 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
 
-      - name: Build and push image
+      - name: Build image
         id: image
         run: |
           IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.service_name }}:${{ github.sha }}"
           docker build -t "$IMAGE" "${{ inputs.app_path }}"
-          docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # Scans the image we just built, before it's pushed anywhere — a
+      # vulnerable image never reaches GAR or Cloud Run. OS/package
+      # vulnerabilities only (no filesystem secret scan; that's CodeQL's
+      # and dependency-review's job on the source itself).
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.image }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Push image
+        run: docker push "${{ steps.image.outputs.image }}"
 
       - name: Deploy to Cloud Run
         run: |
