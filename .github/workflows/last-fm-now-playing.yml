@@ -26,6 +26,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      security-events: write
     with:
       app_path: last-fm/now-playing
       service_name: lastfm-now-playing
