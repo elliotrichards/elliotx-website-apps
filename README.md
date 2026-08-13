@@ -83,7 +83,7 @@ Environment variables:
 
 ### Dockerfile
 
-Two-stage build — `npm install && npm run build` (tsc) in a builder stage, then just the compiled `dist/` copied into a clean `node:24-slim` (Active LTS) runtime stage. No dependencies to install in the final stage since there are none at runtime.
+Two-stage build — `npm install && npm run build` (tsc) in a `node:24-slim` (Active LTS) builder stage, then just the compiled `dist/` copied into a [distroless](https://github.com/GoogleContainerTools/distroless) `nodejs24-debian12:nonroot` runtime stage: no npm, no shell, no package manager, runs as a non-root UID. Not just smaller — `node:24-slim` still bundles npm (and npm's own dependencies) whether or not the final stage ever runs it, so a container scanner will keep flagging CVEs in files that are never actually used at runtime.
 
 ### CI/CD
 
