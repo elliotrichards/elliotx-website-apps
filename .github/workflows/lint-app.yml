@@ -10,6 +10,11 @@ on:
         description: Path to the app's directory
         required: true
         type: string
+      node_version:
+        description: Should match the app's Dockerfile base image version
+        required: false
+        type: string
+        default: '24'
 
 jobs:
   lint:
@@ -22,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ inputs.node_version }}
           cache: npm
           cache-dependency-path: ${{ inputs.app_path }}/package-lock.json
 
