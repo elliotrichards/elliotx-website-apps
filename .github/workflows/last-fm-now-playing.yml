@@ -1,0 +1,24 @@
+name: Deploy last-fm-now-playing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "last-fm/now-playing/**"
+      - ".github/workflows/last-fm-now-playing.yml"
+      - ".github/workflows/deploy-app.yml"
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      app_path: last-fm/now-playing
+      service_name: lastfm-now-playing
+      region: us-west1
+      project_id: elliotx
+      artifact_registry_repo: now-playing
+      workload_identity_provider: projects/362369312254/locations/global/workloadIdentityPools/apps-github-pool/providers/apps-github-provider
+      service_account: lastfm-now-playing-ci@elliotx.iam.gserviceaccount.com

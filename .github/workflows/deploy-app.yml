@@ -1,0 +1,69 @@
+name: Deploy app
+
+# Reusable workflow: build+push an image to GAR via WIF, deploy it to Cloud
+# Run. Adding a new app means adding a thin caller workflow with its own
+# inputs, not duplicating these steps — see last-fm-now-playing.yml.
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: Path to the app's directory (Docker build context)
+        required: true
+        type: string
+      service_name:
+        description: Cloud Run service name
+        required: true
+        type: string
+      region:
+        required: true
+        type: string
+      project_id:
+        required: true
+        type: string
+      artifact_registry_repo:
+        description: Artifact Registry repository ID (not the full path)
+        required: true
+        type: string
+      workload_identity_provider:
+        required: true
+        type: string
+      service_account:
+        description: GCP service account this workflow impersonates via WIF
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ inputs.project_id }}
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.service_name }}:${{ github.sha }}"
+          docker build -t "$IMAGE" "${{ inputs.app_path }}"
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ inputs.service_name }}" \
+            --image="${{ steps.image.outputs.image }}" \
+            --region="${{ inputs.region }}" \
+            --project="${{ inputs.project_id }}" \
+            --quiet
