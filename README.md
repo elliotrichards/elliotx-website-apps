@@ -98,7 +98,7 @@ Everything below is repo-wide policy, not something specific to this one app —
 | --- | --- | --- |
 | Format (Prettier), lint (ESLint), typecheck (`tsc --noEmit`) | `lint-app.yml`, called per-app | Every PR touching that app |
 | `npm audit` (fails on high/critical) | `lint-app.yml` | Every PR touching that app |
-| Container image scan (Trivy, fails on high/critical, fixed vulnerabilities only) | `deploy-app.yml`, after build, before push | Every deploy — a vulnerable image never reaches GAR or Cloud Run |
+| Container image scan (Trivy, fixed vulnerabilities only) | `deploy-app.yml`, after build, before push | Every deploy — findings upload to the Security tab, same as CodeQL. Reports rather than blocks: most findings land in the base image's OS layer, which we don't control and can't patch faster than its maintainer does. Base images are pinned by digest in each app's Dockerfile so Dependabot proposes updates on its own schedule instead. |
 | [CodeQL](https://codeql.github.com/) static analysis | `codeql.yml` | Push/PR to `main`, plus a weekly scheduled scan so newly-disclosed CVEs in unchanged code still get caught |
 | [Dependency review](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review) | `dependency-review.yml` | Every PR — flags newly-introduced vulnerable dependencies in the diff itself |
 | [Dependabot](https://docs.github.com/en/code-security/dependabot) version updates | `dependabot.yml` | Weekly, opens PRs for outdated npm packages, base Docker image, and GitHub Actions versions |
