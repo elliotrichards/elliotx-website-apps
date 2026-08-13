@@ -83,7 +83,7 @@ Environment variables:
 
 ### Dockerfile
 
-Two-stage build — `npm install && npm run build` (tsc) in a builder stage, then just the compiled `dist/` copied into a clean `node:20-slim` runtime stage. No dependencies to install in the final stage since there are none at runtime.
+Two-stage build — `npm install && npm run build` (tsc) in a builder stage, then just the compiled `dist/` copied into a clean `node:24-slim` (Active LTS) runtime stage. No dependencies to install in the final stage since there are none at runtime.
 
 ### CI/CD
 
