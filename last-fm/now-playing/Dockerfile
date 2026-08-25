@@ -18,7 +18,13 @@ RUN npm run build
 # Trivy kept flagging CVEs in files that just sit there unused. Distroless
 # has none of that — smaller image, less attack surface, nothing to patch
 # that isn't actually needed at runtime. :nonroot runs as a non-root UID.
-FROM gcr.io/distroless/nodejs24-debian12:nonroot@sha256:14d42e2511532589a7c7e01a753667a74fcc96266e137e8125006b87b0c32d0a
+#
+# debian13, not debian12: the debian12 track's nonroot digest hadn't been
+# rebuilt since Feb 2026, so 21 libssl3/libc6 CVEs disclosed since then
+# (including one critical) had no patched image to bump to. debian13 is
+# the actively-rebuilt track (last rebuild: days old) and carries none of
+# those CVE IDs.
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:ffab599740d4aaa66029d02b9e6d3de4f622fefb7410081c5ef69c86430f364d
 WORKDIR /app
 ENV NODE_ENV=production
 # No runtime dependencies (built-in http + fetch only) — just the compiled output.
