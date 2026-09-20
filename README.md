@@ -130,6 +130,27 @@ docker build -t now-playing-local .
 docker run -p 8080:8080 -e LASTFM_API_KEY=... -e LASTFM_USERNAME=... now-playing-local
 ```
 
+## `last-fm/recent-tracks`
+
+A daily batch job, not an HTTP API for site visitors: pulls yesterday's (UTC) last.fm scrobbles once a day and appends them to a BigQuery table (`lastfm.recent_tracks`) for later analysis. Plain Python, stdlib `http.server` for the single route plus `requests` and `google-cloud-bigquery` — same "no framework where the stdlib does the job" approach as `now-playing`'s bare `node:http` server.
+
+Same deploy pattern as `now-playing` (WIF, Docker build in CI, Cloud Run, Secret Manager `secret_key_ref`), with two differences:
+
+- **Trigger**: no public traffic. Cloud Scheduler (`elliotx-website-terraform/last-fm-recent-tracks`) hits the service once a day at 06:00 in `Europe/London` (Cloud Scheduler applies the BST/GMT offset itself — no manual UTC math), authenticated with a short-lived OIDC token from a dedicated invoker service account. The service itself sets `allow_unauthenticated = false`, so nothing else can call it.
+- **Secret reuse**: shares the same `lastfm-api-key` Secret Manager secret as `now-playing` (same last.fm account) rather than provisioning a second one — the secret's *container* is still owned by `now-playing`'s Terraform state; this app's state only adds an IAM accessor grant on it.
+
+```
+Cloud Scheduler (06:00 Europe/London)
+  --POST, OIDC token-->  Cloud Run service (lastfm-recent-tracks, private)
+                            --secret_key_ref-->  Secret Manager (lastfm-api-key, shared)
+                            --user.getrecenttracks-->  last.fm API
+                            --insert_rows_json-->  BigQuery (lastfm.recent_tracks)
+```
+
+Environment variables: `LASTFM_API_KEY` (secret), `LASTFM_USERNAME`, `BQ_DATASET`, `BQ_TABLE` (all plain env vars set via Terraform), `PORT` (set by Cloud Run).
+
+No `lint-app.yml` job for this one — that workflow is Node-specific (ESLint/Prettier/tsc), and this app has no equivalent tooling wired up. The Trivy image scan in `deploy-app.yml` and the CodeQL Python analysis still cover it.
+
 ## Adding a new app
 
 1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile, plus `eslint.config.mjs` and `.prettierrc.json` copied from `last-fm/now-playing`.
