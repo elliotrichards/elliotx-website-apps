@@ -1,0 +1,30 @@
+name: last-fm-recent-tracks
+
+# No lint job on PRs: lint-app.yml is Node-specific (npm ci/format/lint/
+# typecheck), and this app is plain Python with no extra tooling to run
+# that against. deploy-app.yml's Trivy image scan still covers it like
+# every other app.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "last-fm/recent-tracks/**"
+      - ".github/workflows/last-fm-recent-tracks.yml"
+      - ".github/workflows/deploy-app.yml"
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy-app.yml
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    with:
+      app_path: last-fm/recent-tracks
+      service_name: lastfm-recent-tracks
+      region: us-west1
+      project_id: elliotx
+      artifact_registry_repo: recent-tracks
+      workload_identity_provider: projects/362369312254/locations/global/workloadIdentityPools/apps-github-pool/providers/apps-github-provider
+      service_account: lastfm-recent-tracks-ci@elliotx.iam.gserviceaccount.com
