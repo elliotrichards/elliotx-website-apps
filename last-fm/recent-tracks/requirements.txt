@@ -1,2 +1,2 @@
 requests>=2.31,<3
-google-cloud-bigquery>=3.25,<4
+google-cloud-bigquery>=3.45.1,<4
