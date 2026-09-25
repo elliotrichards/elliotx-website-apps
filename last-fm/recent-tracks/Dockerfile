@@ -2,7 +2,17 @@
 # now-playing Dockerfile for why (nondeterministic scans otherwise).
 # Dependabot's docker ecosystem entry (../../.github/dependabot.yml)
 # proposes digest bumps on its own schedule.
-FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 AS builder
+#
+# Major/minor MUST match the distroless runtime image's bundled interpreter
+# below (currently 3.13 — `docker run --entrypoint python3 <that image>
+# --version`), not just its Debian track. A prior 3.13->3.14 digest bump
+# here, with the runtime still on 3.13, shipped cp314-only compiled
+# extensions (cffi's _cffi_backend, pulled in via cryptography) into an
+# interpreter that can't load them — ModuleNotFoundError at import time,
+# so the container never opens the health-check port and Cloud Run's
+# deploy fails. Dependabot bumps this line on its own and won't know to
+# check the runtime line, so verify that match by hand before merging one.
+FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0 AS builder
 WORKDIR /app
 COPY requirements.txt ./
 # --target instead of a venv: the final stage has no python -m venv/activate
