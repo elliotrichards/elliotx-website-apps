@@ -12,7 +12,7 @@
 # so the container never opens the health-check port and Cloud Run's
 # deploy fails. Dependabot bumps this line on its own and won't know to
 # check the runtime line, so verify that match by hand before merging one.
-FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0 AS builder
+FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS builder
 WORKDIR /app
 COPY requirements.txt ./
 # --target instead of a venv: the final stage has no python -m venv/activate
