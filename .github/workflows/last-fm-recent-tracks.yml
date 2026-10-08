@@ -3,8 +3,14 @@ name: last-fm-recent-tracks
 # No lint job on PRs: lint-app.yml is Node-specific (npm ci/format/lint/
 # typecheck), and this app is plain Python with no extra tooling to run
 # that against. deploy-app.yml's Trivy image scan still covers it like
-# every other app.
+# every other app. The PR-only build-check job below catches a builder/
+# runtime python mismatch (see the Dockerfile) before it reaches main —
+# #36 and #41 both shipped one because nothing built the image pre-merge.
 on:
+  pull_request:
+    paths:
+      - "last-fm/recent-tracks/**"
+      - ".github/workflows/last-fm-recent-tracks.yml"
   push:
     branches: [main]
     paths:
@@ -13,8 +19,20 @@ on:
       - ".github/workflows/deploy-app.yml"
 
 jobs:
+  build-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t recent-tracks:pr last-fm/recent-tracks
+      # Importing the deps (not main.py, which needs runtime env vars)
+      # loads every compiled extension against the runtime interpreter.
+      - run: docker run --rm recent-tracks:pr -c "import _cffi_backend, google.cloud.bigquery, requests"
+
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/deploy-app.yml
     permissions:
       contents: read
