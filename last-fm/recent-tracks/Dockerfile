@@ -11,8 +11,10 @@
 # interpreter that can't load them — ModuleNotFoundError at import time,
 # so the container never opens the health-check port and Cloud Run's
 # deploy fails. Dependabot bumps this line on its own and won't know to
-# check the runtime line, so verify that match by hand before merging one.
-FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS builder
+# check the runtime line. dependabot.yml ignores minor/major bumps of this
+# image for that reason (this regressed twice: #36, #41) — bump both FROM
+# lines together by hand when distroless moves to a new interpreter.
+FROM python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c AS builder
 WORKDIR /app
 COPY requirements.txt ./
 # --target instead of a venv: the final stage has no python -m venv/activate

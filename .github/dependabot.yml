@@ -23,6 +23,14 @@ updates:
     directory: /last-fm/recent-tracks
     schedule:
       interval: weekly
+    # The builder's python minor must match the distroless runtime's
+    # bundled interpreter (see the Dockerfile) — only allow digest/patch
+    # bumps here; move to a new minor by hand alongside the runtime.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
 
   - package-ecosystem: github-actions
     directory: /
