@@ -32,11 +32,26 @@ function send(res: ServerResponse, status: number, body: object): void {
   res.end(JSON.stringify(body));
 }
 
-// The load balancer appends its own hop, so the client is the first entry.
+function header(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
+}
+
+// elliotx.com is proxied by Cloudflare, which sets CF-Connecting-IP to the
+// visitor's address (overwriting any client-supplied value). Without it,
+// fall back to the address the Google load balancer saw: it appends
+// "<peer>, <lb>" to X-Forwarded-For, so the peer is second from the end —
+// never the first entry, which the client controls. CF-Connecting-IP can
+// still be forged by bypassing Cloudflare and hitting the load balancer
+// directly, which only defeats the rate limit; Turnstile still applies.
 function clientIp(req: IncomingMessage): string | undefined {
-  const forwarded = req.headers['x-forwarded-for'];
-  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
-  return first || req.socket.remoteAddress || undefined;
+  const cf = header(req, 'cf-connecting-ip');
+  if (cf) return cf;
+  const hops =
+    header(req, 'x-forwarded-for')
+      ?.split(',')
+      .map((h) => h.trim()) ?? [];
+  return hops.at(-2) || hops.at(-1) || req.socket.remoteAddress || undefined;
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
