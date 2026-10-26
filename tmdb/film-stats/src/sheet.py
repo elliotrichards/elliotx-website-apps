@@ -11,9 +11,15 @@ from google.auth.transport.requests import AuthorizedSession
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 VALUES_URL = "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{a1}"
 
-# Data starts on row 2 (row 1 is headers), so values[0] is sheet row 2.
+# Row 1 is headers; data starts on row 2. The whole tab is read from A1, so
+# values[0] is the header row and values[n] is sheet row n + 1.
 FIRST_DATA_ROW = 2
-COLUMNS = 6  # A-F: title, tmdb_id, media_type, watched_date, rating, notes
+
+# Columns are found by header name, not position, so they can be in any
+# order and extra columns are ignored. notes is deliberately absent: it's
+# never looked up, so it can't leak into the output.
+REQUIRED_HEADERS = {"tmdb_id", "watched_date"}
+OPTIONAL_HEADERS = {"title", "media_type", "rating"}
 
 # Sheets' date serial epoch: serial 1 is 1899-12-31, so day 0 is the 30th.
 SERIAL_EPOCH = date(1899, 12, 30)
@@ -31,9 +37,13 @@ class Viewing:
     rating: float | None
 
 
-def fetch_rows(sheet_id, tab, cell_range, session=None):
+class SheetError(Exception):
+    """The sheet's shape is wrong (not just a bad row), so the run should fail."""
+
+
+def fetch_rows(sheet_id, tab, session=None):
     """
-    Returns the raw cell values for the range. Uses ADC with the read-only
+    Returns every row of the tab, header row first. Uses ADC with the read-only
     Sheets scope: on Cloud Run that's the runtime SA, which only needs Viewer
     on the sheet itself, no key file and no project IAM role.
 
@@ -45,7 +55,9 @@ def fetch_rows(sheet_id, tab, cell_range, session=None):
         credentials, _ = google.auth.default(scopes=SCOPES)
         session = AuthorizedSession(credentials)
 
-    a1 = "'{}'!{}".format(tab.replace("'", "''"), cell_range)
+    # A bare tab name is the whole tab, always starting at A1 — so sheet row
+    # and column positions line up with list indexes.
+    a1 = "'{}'".format(tab.replace("'", "''"))
     r = session.get(
         VALUES_URL.format(sheet_id=sheet_id, a1=quote(a1, safe="")),
         params={
@@ -60,19 +72,31 @@ def fetch_rows(sheet_id, tab, cell_range, session=None):
 
 def parse_rows(values):
     """
-    Validates raw rows into Viewings. A bad row is skipped and recorded in
-    warnings (sheet row number + reason) instead of failing the run. The
-    notes column is read past but never kept, so it can't leak into output.
+    Validates raw rows (header row first) into Viewings. A bad row is skipped
+    and recorded in warnings (sheet row number + reason) instead of failing
+    the run. A bad header row raises SheetError instead: every row would be
+    misread, so publishing an empty stats.json would be worse than failing.
     """
+    if not values:
+        raise SheetError("sheet is empty: expected a header row")
+    columns = _header_columns(values[0])
+
     viewings, warnings = [], []
 
-    for offset, raw in enumerate(values):
+    for offset, raw in enumerate(values[1:]):
         row = FIRST_DATA_ROW + offset
-        cells = (list(raw) + [""] * COLUMNS)[:COLUMNS]
-        if all(_blank(c) for c in cells):
+        if all(_blank(c) for c in raw):
             continue
 
-        title, raw_id, raw_type, raw_date, raw_rating, _notes = cells
+        def cell(name, raw=raw):
+            index = columns.get(name)
+            return raw[index] if index is not None and index < len(raw) else ""
+
+        title = cell("title")
+        raw_id = cell("tmdb_id")
+        raw_type = cell("media_type")
+        raw_date = cell("watched_date")
+        raw_rating = cell("rating")
 
         tmdb_id = _parse_id(raw_id)
         if tmdb_id is None:
@@ -110,6 +134,24 @@ def parse_rows(values):
         )
 
     return viewings, warnings
+
+
+def _header_columns(header_row):
+    """Maps each known header (case/space-insensitive) to its column index."""
+    columns = {}
+    for index, raw in enumerate(header_row):
+        name = str(raw).strip().lower().replace(" ", "_")
+        if name not in REQUIRED_HEADERS | OPTIONAL_HEADERS:
+            continue
+        if name in columns:
+            raise SheetError(f"duplicate {name!r} column in header row")
+        columns[name] = index
+
+    missing = REQUIRED_HEADERS - columns.keys()
+    if missing:
+        found = [str(h) for h in header_row]
+        raise SheetError(f"header row is missing {sorted(missing)} (found {found})")
+    return columns
 
 
 def _blank(value):

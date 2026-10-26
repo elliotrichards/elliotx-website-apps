@@ -175,16 +175,18 @@ Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Ru
 
 ### Sheet contract
 
-Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row with the same ID):
+Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row with the same ID). Columns are found by **header name**, not position, so they can be in any order. Header matching ignores case, and spaces count as underscores (`Watched Date` works). Unrecognised columns are ignored.
 
-| Col | Header | Notes |
+| Header | Required | Notes |
 | --- | --- | --- |
-| A | `title` | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing. |
-| B | `tmdb_id` | Integer, the source of truth |
-| C | `media_type` | `movie` or `tv`; blank means `movie` |
-| D | `watched_date` | Real date cell, or text `YYYY-MM-DD` |
-| E | `rating` | Optional, 0.5–5 in half steps |
-| F | `notes` | Optional, **never** published (dropped on read) |
+| `tmdb_id` | Yes | Integer, the source of truth |
+| `watched_date` | Yes | Real date cell, or text `YYYY-MM-DD` |
+| `title` | No | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing. |
+| `media_type` | No | `movie` or `tv`; blank (or no column) means `movie` |
+| `rating` | No | 0.5–5 in half steps |
+| `notes` | No | **Never** published: the app never looks this column up |
+
+A missing required header, a duplicated header or an empty tab fails the run, which triggers the alert, rather than publishing an empty `stats.json`.
 
 Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknown `media_type` or an unparseable date is skipped, and an invalid rating is dropped while the viewing is kept. Each of these goes into `stats.json`'s `warnings` with its sheet row number, and none of them fail the run. A title TMDB can't resolve also becomes a warning: it still counts toward totals, dates, streaks and ratings, just not genres, decades or people.
 
@@ -194,7 +196,7 @@ Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknow
 
 Counts are per viewing, so rewatches count again. TV rows are treated as one episode each: runtime is the show's episode run time, and TMDB's combined TV genres ("Sci-Fi & Fantasy") are split into the film genre names so they count together. "Today" is the Europe/London date. The current streak stays alive until the end of the day after the last viewing, so the 05:00 run doesn't reset it before that evening's film. The output is deterministic for a given sheet, cache and date, apart from `generated_at`.
 
-Environment variables: `TMDB_API_TOKEN` (secret), `SHEET_ID`, `SHEET_TAB`, `SHEET_RANGE`, `CACHE_BUCKET`, `STATS_BUCKET`, `TIME_ZONE` (all set via Terraform), `PORT` (set by Cloud Run).
+Environment variables: `TMDB_API_TOKEN` (secret), `SHEET_ID`, `SHEET_TAB` (the whole tab is read), `CACHE_BUCKET`, `STATS_BUCKET`, `TIME_ZONE` (all set via Terraform), `PORT` (set by Cloud Run).
 
 ### Local development
 

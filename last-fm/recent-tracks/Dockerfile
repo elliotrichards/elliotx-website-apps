@@ -28,6 +28,9 @@ RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 FROM gcr.io/distroless/python3-debian13:nonroot@sha256:727eccc5d83f11273c954652667b5b5a1c66120bd4cfb884e879ab77dcdf966a
 WORKDIR /app
 ENV PYTHONPATH=/app/deps
+# Without this, print() is block-buffered (stdout isn't a TTY), so the
+# "run failed:" lines in main.py never reach Cloud Logging.
+ENV PYTHONUNBUFFERED=1
 COPY --from=builder /app/deps ./deps
 COPY main.py ./
 EXPOSE 8080

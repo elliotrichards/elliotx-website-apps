@@ -13,6 +13,10 @@ RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 FROM gcr.io/distroless/python3-debian13:nonroot@sha256:774595d652a294b54c9bd575b2d9fdd1a4b47547dc17b8bfa4c0e953c64855b3
 WORKDIR /app
 ENV PYTHONPATH=/app/deps
+# Without this, print() is block-buffered (stdout isn't a TTY) and log lines
+# only reach Cloud Logging when the buffer fills, i.e. effectively never for
+# a short daily run.
+ENV PYTHONUNBUFFERED=1
 COPY --from=builder /app/deps ./deps
 # src/ is flattened into /app, so main.py's sibling imports (sheet, tmdb, …)
 # resolve from the script's own directory, same as locally.
