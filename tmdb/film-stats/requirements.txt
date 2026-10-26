@@ -1,5 +1,5 @@
 requests>=2.34.2,<3
-google-auth>=2.40.0,<3
+google-auth>=2.62.0,<3
 google-cloud-storage>=3.17.1,<4
 # zoneinfo's fallback database, in case the runtime image has no tzdata.
 tzdata>=2026.5
