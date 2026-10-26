@@ -1,0 +1,62 @@
+{
+  "movie/603": {
+    "media_type": "movie",
+    "title": "The Matrix",
+    "release_date": "1999-03-30",
+    "runtime": 136,
+    "genres": ["Action", "Science Fiction"],
+    "directors": ["Lana Wachowski", "Lilly Wachowski"],
+    "creators": [],
+    "poster_path": "/matrix.jpg",
+    "original_language": "en",
+    "vote_average": 8.2
+  },
+  "movie/129": {
+    "media_type": "movie",
+    "title": "Spirited Away",
+    "release_date": "2001-07-20",
+    "runtime": 125,
+    "genres": ["Animation", "Family", "Fantasy"],
+    "directors": ["Hayao Miyazaki"],
+    "creators": [],
+    "poster_path": "/spirited.jpg",
+    "original_language": "ja",
+    "vote_average": 8.5
+  },
+  "movie/496243": {
+    "media_type": "movie",
+    "title": "Parasite",
+    "release_date": "2019-05-30",
+    "runtime": 133,
+    "genres": ["Comedy", "Thriller", "Drama"],
+    "directors": ["Bong Joon-ho"],
+    "creators": [],
+    "poster_path": "/parasite.jpg",
+    "original_language": "ko",
+    "vote_average": 8.5
+  },
+  "movie/680": {
+    "media_type": "movie",
+    "title": "Pulp Fiction",
+    "release_date": "1994-09-10",
+    "runtime": 154,
+    "genres": ["Thriller", "Crime"],
+    "directors": ["Quentin Tarantino"],
+    "creators": [],
+    "poster_path": "/pulp.jpg",
+    "original_language": "en",
+    "vote_average": 8.5
+  },
+  "tv/1396": {
+    "media_type": "tv",
+    "title": "Breaking Bad",
+    "release_date": "2008-01-20",
+    "runtime": 47,
+    "genres": ["Drama", "Crime"],
+    "directors": [],
+    "creators": ["Vince Gilligan"],
+    "poster_path": "/bb.jpg",
+    "original_language": "en",
+    "vote_average": 8.9
+  }
+}

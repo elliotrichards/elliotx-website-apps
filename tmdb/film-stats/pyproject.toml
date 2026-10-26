@@ -1,0 +1,13 @@
+# Tooling config only; this isn't a packaged project. The image runs
+# src/main.py directly (see the Dockerfile).
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
