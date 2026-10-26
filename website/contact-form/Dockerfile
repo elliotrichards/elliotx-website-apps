@@ -4,7 +4,7 @@
 # exact issue three times in a row before pinning). Dependabot's docker
 # ecosystem entry (see ../../.github/dependabot.yml) proposes digest bumps
 # on its own schedule, reviewed like any other dependency update.
-FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS builder
+FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
