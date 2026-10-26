@@ -20,14 +20,13 @@ def run():
     # runtime env (the PR build-check imports it to smoke-test the image).
     sheet_id = os.environ["SHEET_ID"]
     sheet_tab = os.environ.get("SHEET_TAB", "Watch Log")
-    sheet_range = os.environ.get("SHEET_RANGE", "A2:F")
     cache_bucket = os.environ["CACHE_BUCKET"]
     stats_bucket = os.environ["STATS_BUCKET"]
     stats_object = os.environ.get("STATS_OBJECT", "stats.json")
     # "Today" for streaks and month filling is the watcher's local date, not UTC.
     time_zone = ZoneInfo(os.environ.get("TIME_ZONE", "Europe/London"))
 
-    values = sheet.fetch_rows(sheet_id, sheet_tab, sheet_range)
+    values = sheet.fetch_rows(sheet_id, sheet_tab)
     viewings, row_warnings = sheet.parse_rows(values)
 
     gcs = storage.Client()
@@ -46,7 +45,7 @@ def run():
     size = publish.publish(gcs.bucket(stats_bucket), payload, stats_object)
 
     summary = {
-        "rows_read": len(values),
+        "rows_read": max(len(values) - 1, 0),  # excluding the header row
         "viewings": len(viewings),
         # A bad rating warns but keeps its row, so not every warned row was skipped.
         "rows_skipped": len({w["row"] for w in row_warnings} - {v.row for v in viewings}),

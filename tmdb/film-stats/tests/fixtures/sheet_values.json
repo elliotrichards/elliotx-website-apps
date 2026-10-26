@@ -1,4 +1,5 @@
 [
+  ["title", "tmdb_id", "media_type", "watched_date", "rating", "notes"],
   ["The Matrix", 603, "movie", 46021, 4.5, "first watch"],
   ["Spirited Away", 129, "", "2025-12-31"],
   ["Spirited Away", 129, "movie", "2026-01-01", 5],
