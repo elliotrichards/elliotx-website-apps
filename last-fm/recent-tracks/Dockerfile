@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 # runtime image, so nothing to patch there that isn't actually used at
 # runtime. :nonroot runs as a non-root UID. debian13 track, matching the
 # now-playing image, for the same actively-rebuilt-base reasoning.
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:727eccc5d83f11273c954652667b5b5a1c66120bd4cfb884e879ab77dcdf966a
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2
 WORKDIR /app
 ENV PYTHONPATH=/app/deps
 # Without this, print() is block-buffered (stdout isn't a TTY), so the
