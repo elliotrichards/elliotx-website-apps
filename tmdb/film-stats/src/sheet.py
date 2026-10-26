@@ -1,0 +1,157 @@
+"""Reads the watch-log Google Sheet and validates it into Viewing rows."""
+
+import re
+from dataclasses import dataclass
+from datetime import date, timedelta
+from urllib.parse import quote
+
+import google.auth
+from google.auth.transport.requests import AuthorizedSession
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+VALUES_URL = "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{a1}"
+
+# Data starts on row 2 (row 1 is headers), so values[0] is sheet row 2.
+FIRST_DATA_ROW = 2
+COLUMNS = 6  # A-F: title, tmdb_id, media_type, watched_date, rating, notes
+
+# Sheets' date serial epoch: serial 1 is 1899-12-31, so day 0 is the 30th.
+SERIAL_EPOCH = date(1899, 12, 30)
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MEDIA_TYPES = {"movie", "tv"}
+
+
+@dataclass(frozen=True)
+class Viewing:
+    row: int
+    title: str
+    tmdb_id: int
+    media_type: str
+    watched_date: date
+    rating: float | None
+
+
+def fetch_rows(sheet_id, tab, cell_range, session=None):
+    """
+    Returns the raw cell values for the range. Uses ADC with the read-only
+    Sheets scope: on Cloud Run that's the runtime SA, which only needs Viewer
+    on the sheet itself, no key file and no project IAM role.
+
+    SERIAL_NUMBER, not FORMATTED_STRING, for dates: a formatted string follows
+    the sheet's locale (26/10/2026 vs 10/26/2026), a serial number doesn't.
+    Dates typed as plain text still come back as strings and get parsed as ISO.
+    """
+    if session is None:
+        credentials, _ = google.auth.default(scopes=SCOPES)
+        session = AuthorizedSession(credentials)
+
+    a1 = "'{}'!{}".format(tab.replace("'", "''"), cell_range)
+    r = session.get(
+        VALUES_URL.format(sheet_id=sheet_id, a1=quote(a1, safe="")),
+        params={
+            "valueRenderOption": "UNFORMATTED_VALUE",
+            "dateTimeRenderOption": "SERIAL_NUMBER",
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json().get("values", [])
+
+
+def parse_rows(values):
+    """
+    Validates raw rows into Viewings. A bad row is skipped and recorded in
+    warnings (sheet row number + reason) instead of failing the run. The
+    notes column is read past but never kept, so it can't leak into output.
+    """
+    viewings, warnings = [], []
+
+    for offset, raw in enumerate(values):
+        row = FIRST_DATA_ROW + offset
+        cells = (list(raw) + [""] * COLUMNS)[:COLUMNS]
+        if all(_blank(c) for c in cells):
+            continue
+
+        title, raw_id, raw_type, raw_date, raw_rating, _notes = cells
+
+        tmdb_id = _parse_id(raw_id)
+        if tmdb_id is None:
+            reason = "missing tmdb_id" if _blank(raw_id) else f"non-numeric tmdb_id {raw_id!r}"
+            warnings.append({"row": row, "reason": reason})
+            continue
+
+        media_type = "movie" if _blank(raw_type) else str(raw_type).strip().lower()
+        if media_type not in MEDIA_TYPES:
+            warnings.append({"row": row, "reason": f"unknown media_type {raw_type!r}"})
+            continue
+
+        watched = _parse_date(raw_date)
+        if watched is None:
+            reason = "missing watched_date" if _blank(raw_date) else f"unparseable watched_date {raw_date!r}"
+            warnings.append({"row": row, "reason": reason})
+            continue
+
+        rating = None
+        if not _blank(raw_rating):
+            rating = _parse_rating(raw_rating)
+            if rating is None:
+                # The viewing itself is still valid, so keep it, just unrated.
+                warnings.append({"row": row, "reason": f"invalid rating {raw_rating!r}, ignored"})
+
+        viewings.append(
+            Viewing(
+                row=row,
+                title=str(title).strip(),
+                tmdb_id=tmdb_id,
+                media_type=media_type,
+                watched_date=watched,
+                rating=rating,
+            )
+        )
+
+    return viewings, warnings
+
+
+def _blank(value):
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _parse_id(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _parse_date(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        # Date-time cells carry a fractional day; only the date matters here.
+        if value < 1:
+            return None
+        return SERIAL_EPOCH + timedelta(days=int(value))
+    if isinstance(value, str) and ISO_DATE.match(value.strip()):
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_rating(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.5 <= rating <= 5 and (rating * 2).is_integer():
+        return rating
+    return None

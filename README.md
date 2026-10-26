@@ -151,6 +151,70 @@ Environment variables: `LASTFM_API_KEY` (secret), `LASTFM_USERNAME`, `BQ_DATASET
 
 No `lint-app.yml` job for this one — that workflow is Node-specific (ESLint/Prettier/tsc), and this app has no equivalent tooling wired up. The Trivy image scan in `deploy-app.yml` and the CodeQL Python analysis still cover it.
 
+## `tmdb/film-stats`
+
+A daily batch job: reads a hand-edited film watch log from a Google Sheet, enriches each title with [TMDB](https://www.themoviedb.org/) metadata, computes dashboard stats, and publishes them as a single public `stats.json` for the site to render. Everything except the sheet is derived and rebuildable.
+
+```
+Cloud Scheduler (05:00 Europe/London)
+  --POST, OIDC token-->  Cloud Run service (film-stats, private)
+                            --Sheets API, ADC, read-only scope-->  Google Sheet ("Watch Log" tab)
+                            --GET /{movie|tv}/{id}-->  TMDB API (token via secret_key_ref)
+                            --tmdb/{type}/{id}.json-->  GCS elliotx-film-tmdb-cache (private)
+                            --stats.json-->  GCS elliotx-film-stats-public (allUsers read, CORS: elliotx.com)
+```
+
+Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Run, Secret Manager `secret_key_ref`), with its own Terraform state in `elliotx-website-terraform/film-stats`. Unlike `recent-tracks` it has real Python tooling: the PR job runs `ruff format --check`, `ruff check` and `pytest` inline (not `lint-app.yml`, which is Node-only).
+
+### Code
+
+- `src/sheet.py`: reads the sheet and validates rows. Dates are requested as serial numbers, not formatted strings, so the sheet's locale can't make `03/04` ambiguous. Text cells in ISO `YYYY-MM-DD` still parse.
+- `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of *trimmed* responses. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are refreshed, and the old copy is kept if TMDB is down.
+- `src/stats.py`: pure functions with no I/O and no clock reads, so they're fully unit-tested.
+- `src/publish.py`: uploads under `_staging/`, then server-side copies over `stats.json` with `Cache-Control: public, max-age=3600`.
+
+### Sheet contract
+
+Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row with the same ID):
+
+| Col | Header | Notes |
+| --- | --- | --- |
+| A | `title` | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing. |
+| B | `tmdb_id` | Integer, the source of truth |
+| C | `media_type` | `movie` or `tv`; blank means `movie` |
+| D | `watched_date` | Real date cell, or text `YYYY-MM-DD` |
+| E | `rating` | Optional, 0.5–5 in half steps |
+| F | `notes` | Optional, **never** published (dropped on read) |
+
+Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknown `media_type` or an unparseable date is skipped, and an invalid rating is dropped while the viewing is kept. Each of these goes into `stats.json`'s `warnings` with its sheet row number, and none of them fail the run. A title TMDB can't resolve also becomes a warning: it still counts toward totals, dates, streaks and ratings, just not genres, decades or people.
+
+### `stats.json` (schema_version 1)
+
+`totals` (viewings, unique, rewatches, runtime_hours, by_media_type), `by_year` and `by_month` (zero-filled up to the current month), `genres`, `decades`, `directors` (films, top 10), `creators` (TV, top 10), `languages`, `streaks` (current and longest, with start/end dates), `busiest` (month, weekday, full weekday breakdown), `ratings` (null if nothing is rated), `recent` (last 12), `warnings`, `attribution`, `generated_at`.
+
+Counts are per viewing, so rewatches count again. TV rows are treated as one episode each: runtime is the show's episode run time, and TMDB's combined TV genres ("Sci-Fi & Fantasy") are split into the film genre names so they count together. "Today" is the Europe/London date. The current streak stays alive until the end of the day after the last viewing, so the 05:00 run doesn't reset it before that evening's film. The output is deterministic for a given sheet, cache and date, apart from `generated_at`.
+
+Environment variables: `TMDB_API_TOKEN` (secret), `SHEET_ID`, `SHEET_TAB`, `SHEET_RANGE`, `CACHE_BUCKET`, `STATS_BUCKET`, `TIME_ZONE` (all set via Terraform), `PORT` (set by Cloud Run).
+
+### Local development
+
+```bash
+cd tmdb/film-stats
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check . && .venv/bin/pytest
+```
+
+### First-time setup (manual steps)
+
+1. **Create the sheet** with a `Watch Log` tab and the headers above, plus a few test rows. Copy its ID from the URL (`/spreadsheets/d/<ID>/edit`).
+2. **Set repo variables** in `elliotx-website-terraform` (Settings → Secrets and variables → Actions → Variables): `FILM_STATS_SHEET_ID`, and optionally `FILM_STATS_ALERT_EMAIL` for failed-run emails.
+3. **First apply** (`create_service = false`, the default): merge the Terraform PR. This creates the APIs, SAs, buckets, secret container and Artifact Registry.
+4. **Share the sheet** as Viewer with the `runner_service_account_email` output (`film-stats-runner@elliotx.iam.gserviceaccount.com`). Untick "Notify people".
+5. **Add the TMDB token**: from a TMDB account, go to Settings → API and copy the *API Read Access Token* (the long JWT, not the v3 API key). Then run `printf %s "$TOKEN" | gcloud secrets versions add tmdb-api-token --data-file=- --project=elliotx`.
+6. **Second apply**: set `create_service` to `true` in `film-stats/variables.tf` and merge. This creates the service (on the placeholder image), Scheduler job and alert.
+7. **Deploy the app**: merge the `tmdb/film-stats` PR in this repo. The push to `main` builds and deploys the real image.
+8. **Trigger once**: run `gcloud scheduler jobs run film-stats-daily --location=us-west1 --project=elliotx`, then check the service logs for the `film-stats run:` summary line, and `curl -s https://storage.googleapis.com/elliotx-film-stats-public/stats.json | jq .warnings`.
+
 ## Adding a new app
 
 1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile, plus `eslint.config.mjs` and `.prettierrc.json` copied from `last-fm/now-playing`.

@@ -57,6 +57,22 @@ updates:
           - version-update:semver-major
           - version-update:semver-minor
 
+  - package-ecosystem: pip
+    directory: /tmdb/film-stats
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /tmdb/film-stats
+    schedule:
+      interval: weekly
+    # Same builder/runtime python pairing hold as recent-tracks above.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
