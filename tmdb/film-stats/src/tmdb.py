@@ -1,7 +1,9 @@
 """TMDB metadata lookup, fronted by a GCS cache of trimmed responses."""
 
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import requests
@@ -9,9 +11,15 @@ from google.api_core import exceptions as gcs_exceptions
 
 API_BASE = "https://api.themoviedb.org/3"
 MAX_ATTEMPTS = 4
-# TMDB's documented ceiling is ~50 req/s; a small fixed gap keeps a cold
-# cache (first run, every title uncached) well under it.
+# TMDB's documented ceiling is ~50 req/s. A small gap per request across a
+# few workers stays well under it (~15 req/s at typical latency).
 POLITE_DELAY_SECONDS = 0.1
+FETCH_WORKERS = 4
+
+# Cap on TMDB lookups per run, so a big backfill can't push a run past the
+# service's 120s timeout. ~600 lookups is ~40s across the workers above;
+# anything over the cap waits for a later run (see enrich).
+MAX_FETCHES_PER_RUN = 600
 
 # Cached entries are refreshed after this long so vote averages and posters
 # don't go permanently stale. A failed refresh falls back to the stale copy.
@@ -39,6 +47,7 @@ class TmdbClient:
         self._session = session or requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
         self._sleep = sleep
+        self._lock = threading.Lock()
         self.calls = 0
 
     def fetch(self, media_type, tmdb_id):
@@ -48,7 +57,8 @@ class TmdbClient:
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             self._sleep(POLITE_DELAY_SECONDS)
-            self.calls += 1
+            with self._lock:  # fetch runs on several threads at once
+                self.calls += 1
             try:
                 r = self._session.get(url, params={"append_to_response": "credits"}, timeout=20)
             except requests.RequestException as exc:
@@ -108,64 +118,101 @@ def trim(media_type, raw):
 
 
 class GcsCache:
-    """tmdb/{movie|tv}/{id}.json in the private cache bucket."""
+    """
+    One index object, tmdb/index.json, holding every trimmed entry: read once
+    and written once per run. (A per-title object meant one GCS read per
+    title, which for a backfill of thousands is most of the run's time limit.)
+    """
+
+    INDEX_PATH = "tmdb/index.json"
 
     def __init__(self, bucket):
         self._bucket = bucket
 
-    def get(self, media_type, tmdb_id):
-        blob = self._bucket.blob(_cache_path(media_type, tmdb_id))
+    def load(self):
+        """{(media_type, id): (data, cached_at)}; empty if there's no index yet or it's unreadable."""
         try:
-            entry = json.loads(blob.download_as_text())
-            return entry["data"], datetime.fromisoformat(entry["cached_at"])
+            raw = json.loads(self._bucket.blob(self.INDEX_PATH).download_as_text())
+            return {_parse_key(k): (v["data"], datetime.fromisoformat(v["cached_at"])) for k, v in raw.items()}
         except gcs_exceptions.NotFound:
-            return None, None
-        except (ValueError, KeyError, TypeError):
-            # A corrupt entry is just a miss; the refetch overwrites it.
-            return None, None
+            return {}
+        except (ValueError, KeyError, TypeError, AttributeError):
+            # A corrupt index is just a cold cache; this run rewrites it.
+            return {}
 
-    def put(self, media_type, tmdb_id, data, now):
-        blob = self._bucket.blob(_cache_path(media_type, tmdb_id))
-        blob.upload_from_string(
-            json.dumps({"cached_at": now.isoformat(), "data": data}),
+    def save(self, entries):
+        body = {f"{mt}/{tid}": {"cached_at": at.isoformat(), "data": data} for (mt, tid), (data, at) in entries.items()}
+        self._bucket.blob(self.INDEX_PATH).upload_from_string(
+            json.dumps(body, separators=(",", ":")),
             content_type="application/json",
         )
 
 
-def enrich(keys, client, cache, now=None):
+def enrich(keys, client, cache, now=None, max_fetches=MAX_FETCHES_PER_RUN, workers=FETCH_WORKERS):
     """
     Returns ({(media_type, id): trimmed metadata}, warnings, cache_hits).
-    Fresh cache entries skip TMDB entirely; stale ones are refreshed but kept
-    if TMDB fails; a title with neither just gets a warning.
+
+    Fresh cache entries skip TMDB entirely. Stale ones are used as they are
+    and refreshed if there's room in this run's lookup budget, oldest first,
+    after titles with no entry at all. A failed lookup keeps any stale copy;
+    a title with neither gets a warning. Titles that didn't fit in the
+    budget get one combined warning and are picked up by later runs.
     """
     now = now or datetime.now(UTC)
-    metadata, warnings, cache_hits = {}, [], 0
+    entries = cache.load()
+    metadata, warnings = {}, []
+    missing, stale = [], []
 
-    for media_type, tmdb_id in keys:
-        cached, cached_at = cache.get(media_type, tmdb_id)
-        if cached is not None and now - cached_at < CACHE_MAX_AGE:
-            metadata[(media_type, tmdb_id)] = cached
-            cache_hits += 1
+    for key in keys:
+        entry = entries.get(key)
+        if entry is None:
+            missing.append(key)
             continue
+        data, cached_at = entry
+        metadata[key] = data
+        if now - cached_at >= CACHE_MAX_AGE:
+            stale.append(key)
 
+    stale.sort(key=lambda k: entries[k][1])
+    todo = (missing + stale)[:max_fetches]
+    deferred = len(missing) - min(len(missing), max_fetches)
+
+    def lookup(key):
         try:
-            data = trim(media_type, client.fetch(media_type, tmdb_id))
+            return trim(key[0], client.fetch(*key)), None
         except TmdbError as exc:
-            if cached is not None:
-                metadata[(media_type, tmdb_id)] = cached
-                cache_hits += 1
-            else:
-                warnings.append({"tmdb_id": tmdb_id, "media_type": media_type, "reason": str(exc)})
-            continue
+            return None, exc
 
-        cache.put(media_type, tmdb_id, data, now)
-        metadata[(media_type, tmdb_id)] = data
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lookup, todo))
 
+    fetched = 0
+    for (media_type, tmdb_id), (data, exc) in zip(todo, results, strict=True):
+        key = (media_type, tmdb_id)
+        if data is not None:
+            metadata[key] = data
+            entries[key] = (data, now)
+            fetched += 1
+        elif key not in metadata:
+            warnings.append({"tmdb_id": tmdb_id, "media_type": media_type, "reason": str(exc)})
+
+    if deferred:
+        warnings.append(
+            {
+                "reason": f"{deferred} titles are waiting for a TMDB lookup "
+                f"(at most {max_fetches} per run); later runs will fill them in"
+            }
+        )
+    if fetched:
+        cache.save(entries)
+
+    cache_hits = len(metadata) - fetched
     return metadata, warnings, cache_hits
 
 
-def _cache_path(media_type, tmdb_id):
-    return f"tmdb/{media_type}/{tmdb_id}.json"
+def _parse_key(key):
+    media_type, tmdb_id = key.split("/")
+    return media_type, int(tmdb_id)
 
 
 def _tv_runtime(raw):

@@ -35,12 +35,32 @@ class FakeSession:
 class MemoryCache:
     def __init__(self, entries=None):
         self.entries = dict(entries or {})
+        self.saves = 0
 
-    def get(self, media_type, tmdb_id):
-        return self.entries.get((media_type, tmdb_id), (None, None))
+    def load(self):
+        return dict(self.entries)
 
-    def put(self, media_type, tmdb_id, data, now):
-        self.entries[(media_type, tmdb_id)] = (data, now)
+    def save(self, entries):
+        self.entries = dict(entries)
+        self.saves += 1
+
+
+class FakeClient:
+    """Stands in for TmdbClient in enrich tests: answers by title, so worker order doesn't matter."""
+
+    def __init__(self, answers=None, default=None):
+        self.answers = answers or {}
+        self.default = default
+        self.fetched = []
+
+    def fetch(self, media_type, tmdb_id):
+        self.fetched.append((media_type, tmdb_id))
+        answer = self.answers.get((media_type, tmdb_id), self.default)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is None:
+            raise tmdb.TmdbNotFound(f"TMDB has no {media_type} with id {tmdb_id}")
+        return answer
 
 
 MOVIE = {
@@ -102,31 +122,107 @@ def test_fetch_gives_up_after_max_attempts():
 
 def test_enrich_uses_fresh_cache_without_calling_tmdb():
     cache = MemoryCache({("movie", 603): ({"title": "cached"}, NOW - timedelta(days=1))})
-    c, _ = client([])
-    metadata, warnings, hits = tmdb.enrich([("movie", 603)], c, cache, now=NOW)
+    client = FakeClient()
+    metadata, warnings, hits = tmdb.enrich([("movie", 603)], client, cache, now=NOW)
     assert metadata[("movie", 603)] == {"title": "cached"}
-    assert (warnings, hits, c.calls) == ([], 1, 0)
+    assert (warnings, hits, client.fetched, cache.saves) == ([], 1, [], 0)
 
 
 def test_enrich_falls_back_to_stale_cache_when_tmdb_is_down():
     stale = NOW - tmdb.CACHE_MAX_AGE - timedelta(days=1)
     cache = MemoryCache({("movie", 603): ({"title": "stale"}, stale)})
-    c, _ = client([FakeResponse(500)] * tmdb.MAX_ATTEMPTS)
-    metadata, warnings, _ = tmdb.enrich([("movie", 603)], c, cache, now=NOW)
+    client = FakeClient(default=tmdb.TmdbError("HTTP 500"))
+    metadata, warnings, hits = tmdb.enrich([("movie", 603)], client, cache, now=NOW)
+    assert client.fetched == [("movie", 603)]  # it did try to refresh
     assert metadata[("movie", 603)] == {"title": "stale"}
-    assert warnings == []
+    assert (warnings, hits, cache.saves) == ([], 1, 0)
+
+
+def test_enrich_refreshes_stale_entries():
+    stale = NOW - tmdb.CACHE_MAX_AGE - timedelta(days=1)
+    cache = MemoryCache({("movie", 603): ({"title": "stale"}, stale)})
+    metadata, _, hits = tmdb.enrich([("movie", 603)], FakeClient(default=MOVIE), cache, now=NOW)
+    assert metadata[("movie", 603)]["title"] == "The Matrix"
+    assert cache.entries[("movie", 603)][1] == NOW
+    assert hits == 0
 
 
 def test_enrich_warns_when_no_cache_and_tmdb_fails():
-    c, _ = client([FakeResponse(404)])
-    metadata, warnings, _ = tmdb.enrich([("movie", 1)], c, MemoryCache(), now=NOW)
+    metadata, warnings, _ = tmdb.enrich([("movie", 1)], FakeClient(), MemoryCache(), now=NOW)
     assert metadata == {}
     assert warnings == [{"tmdb_id": 1, "media_type": "movie", "reason": "TMDB has no movie with id 1"}]
 
 
-def test_enrich_writes_trimmed_result_to_cache():
+def test_enrich_writes_trimmed_results_to_the_cache_once():
     cache = MemoryCache()
-    c, _ = client([FakeResponse(200, MOVIE)])
-    tmdb.enrich([("movie", 603)], c, cache, now=NOW)
-    data, cached_at = cache.entries[("movie", 603)]
-    assert data == tmdb.trim("movie", MOVIE) and cached_at == NOW
+    keys = [("movie", i) for i in range(1, 6)]
+    tmdb.enrich(keys, FakeClient(default=MOVIE), cache, now=NOW)
+    assert cache.saves == 1
+    assert cache.entries[("movie", 3)] == (tmdb.trim("movie", MOVIE), NOW)
+
+
+def test_enrich_caps_lookups_per_run_and_defers_the_rest():
+    keys = [("movie", i) for i in range(1, 11)]
+    cache = MemoryCache()
+    client = FakeClient(default=MOVIE)
+    metadata, warnings, _ = tmdb.enrich(keys, client, cache, now=NOW, max_fetches=4)
+
+    assert len(client.fetched) == 4 and len(metadata) == 4
+    assert warnings == [
+        {"reason": "6 titles are waiting for a TMDB lookup (at most 4 per run); later runs will fill them in"}
+    ]
+
+    # The next run picks up where this one stopped.
+    client = FakeClient(default=MOVIE)
+    metadata, warnings, hits = tmdb.enrich(keys, client, cache, now=NOW, max_fetches=4)
+    assert (len(metadata), hits, len(client.fetched)) == (8, 4, 4)
+
+
+def test_enrich_spends_the_budget_on_missing_titles_before_stale_ones():
+    old, older = NOW - timedelta(days=40), NOW - timedelta(days=60)
+    cache = MemoryCache({("movie", 1): ({"title": "a"}, old), ("movie", 2): ({"title": "b"}, older)})
+    keys = [("movie", 1), ("movie", 2), ("movie", 3)]
+    client = FakeClient(default=MOVIE)
+    metadata, warnings, _ = tmdb.enrich(keys, client, cache, now=NOW, max_fetches=2)
+
+    # Missing title first, then the oldest stale entry.
+    assert sorted(client.fetched) == [("movie", 2), ("movie", 3)]
+    assert metadata[("movie", 1)] == {"title": "a"}  # stale, still used
+    assert warnings == []  # nothing was left without metadata
+
+
+class FakeBlob:
+    def __init__(self, store, name):
+        self.store, self.name = store, name
+
+    def download_as_text(self):
+        if self.name not in self.store:
+            raise tmdb.gcs_exceptions.NotFound("no such object")
+        return self.store[self.name]
+
+    def upload_from_string(self, body, content_type):
+        self.store[self.name] = body
+
+
+class FakeBucket:
+    def __init__(self):
+        self.store = {}
+
+    def blob(self, name):
+        return FakeBlob(self.store, name)
+
+
+def test_gcs_cache_round_trips_one_index_object():
+    bucket = FakeBucket()
+    cache = tmdb.GcsCache(bucket)
+    assert cache.load() == {}  # no index yet
+
+    cache.save({("movie", 603): ({"title": "x"}, NOW), ("tv", 1396): ({"title": "y"}, NOW)})
+    assert list(bucket.store) == [tmdb.GcsCache.INDEX_PATH]
+    assert cache.load() == {("movie", 603): ({"title": "x"}, NOW), ("tv", 1396): ({"title": "y"}, NOW)}
+
+
+def test_gcs_cache_treats_a_corrupt_index_as_empty():
+    bucket = FakeBucket()
+    bucket.store[tmdb.GcsCache.INDEX_PATH] = "{not json"
+    assert tmdb.GcsCache(bucket).load() == {}

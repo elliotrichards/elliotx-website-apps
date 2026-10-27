@@ -160,8 +160,8 @@ Cloud Scheduler (05:00 Europe/London)
   --POST, OIDC token-->  Cloud Run service (film-stats, private)
                             --Sheets API, ADC, read-only scope-->  Google Sheet ("Watch Log" tab)
                             --GET /{movie|tv}/{id}-->  TMDB API (token via secret_key_ref)
-                            --tmdb/{type}/{id}.json-->  GCS elliotx-film-tmdb-cache (private)
-                            --stats.json-->  GCS elliotx-film-stats-public (allUsers read, CORS: elliotx.com)
+                            --tmdb/index.json-->  GCS elliotx-film-tmdb-cache (private)
+                            --stats.json + viewings.json-->  GCS elliotx-film-stats-public (allUsers read, CORS: elliotx.com)
 ```
 
 Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Run, Secret Manager `secret_key_ref`), with its own Terraform state in `elliotx-website-terraform/film-stats`. Unlike `recent-tracks` it has real Python tooling: the PR job runs `ruff format --check`, `ruff check` and `pytest` inline (not `lint-app.yml`, which is Node-only).
@@ -169,9 +169,10 @@ Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Ru
 ### Code
 
 - `src/sheet.py`: reads the sheet and validates rows. Dates are requested as serial numbers, not formatted strings, so the sheet's locale can't make `03/04` ambiguous. Text cells in ISO `YYYY-MM-DD` still parse.
-- `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of *trimmed* responses. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are refreshed, and the old copy is kept if TMDB is down.
+- `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of *trimmed* responses in one index object (`tmdb/index.json`), read once and written once per run. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are used as-is and refreshed when there's room, and the old copy is kept if TMDB is down.
+- **Lookup budget**: at most 600 TMDB lookups per run (`MAX_FETCHES_PER_RUN`), four at a time, which is about 40s against the service's 120s timeout. Titles with no cache entry come first, then the stalest. Anything over the cap still counts in the totals, gets one combined "N titles are waiting for a TMDB lookup" warning, and is filled in by later runs. So a big backfill catches up over a few days on its own; trigger the Scheduler job by hand to speed it up.
 - `src/stats.py`: pure functions with no I/O and no clock reads, so they're fully unit-tested.
-- `src/publish.py`: uploads under `_staging/`, then server-side copies over `stats.json` with `Cache-Control: public, max-age=3600`.
+- `src/publish.py`: uploads under `_staging/`, then server-side copies over the live object with `Cache-Control: public, max-age=3600`. Used for both published files.
 
 ### Sheet contract
 
@@ -189,6 +190,10 @@ Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row wi
 A missing required header, a duplicated header or an empty tab fails the run, which triggers the alert, rather than publishing an empty `stats.json`.
 
 Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknown `media_type` or an unparseable date is skipped, and an invalid rating is dropped while the viewing is kept. Each of these goes into `stats.json`'s `warnings` with its sheet row number, and none of them fail the run. A title TMDB can't resolve also becomes a warning: it still counts toward totals, dates, streaks and ratings, just not genres, decades or people.
+
+### `viewings.json` (schema_version 1)
+
+The full watch log for `/data/movies/log`: `{schema_version, generated_at, count, viewings}`, where `viewings` is every viewing newest first, in the same row shape as `stats.json`'s `recent`. It's a separate file so the dashboard's `stats.json` stays small however long the log grows. It's published just before `stats.json`.
 
 ### `stats.json` (schema_version 1)
 

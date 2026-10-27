@@ -11,7 +11,8 @@ import sheet
 import stats
 import tmdb
 
-# Past this, split `recent` (or a future `all_viewings`) into its own file.
+# Past this, stats.json is getting too big for the dashboard to load cheaply.
+# (The full log is already split out into viewings.json.)
 SIZE_WARNING_BYTES = 300_000
 
 
@@ -23,6 +24,7 @@ def run():
     cache_bucket = os.environ["CACHE_BUCKET"]
     stats_bucket = os.environ["STATS_BUCKET"]
     stats_object = os.environ.get("STATS_OBJECT", "stats.json")
+    viewings_object = os.environ.get("VIEWINGS_OBJECT", "viewings.json")
     # "Today" for streaks and month filling is the watcher's local date, not UTC.
     time_zone = ZoneInfo(os.environ.get("TIME_ZONE", "Europe/London"))
 
@@ -42,6 +44,10 @@ def run():
         generated_at=now,
         warnings=row_warnings + tmdb_warnings,
     )
+    log = stats.viewings_log(viewings, metadata, generated_at=now)
+    # The log first: stats.json is what the site's pull checks, so once it
+    # changes, the matching log is already in place.
+    log_size = publish.publish(gcs.bucket(stats_bucket), log, viewings_object)
     size = publish.publish(gcs.bucket(stats_bucket), payload, stats_object)
 
     summary = {
@@ -54,6 +60,7 @@ def run():
         "tmdb_calls": client.calls,
         "cache_hits": cache_hits,
         "bytes": size,
+        "log_bytes": log_size,
     }
     print(f"film-stats run: {json.dumps(summary)}")
     if size > SIZE_WARNING_BYTES:
