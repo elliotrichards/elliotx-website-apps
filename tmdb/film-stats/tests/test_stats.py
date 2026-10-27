@@ -14,6 +14,7 @@ from stats import (
     ratings,
     recent,
     streaks,
+    viewings_log,
 )
 
 TODAY = date(2026, 2, 4)
@@ -194,3 +195,17 @@ def test_recent_limit_and_same_day_order():
     rec = recent(viewings, {})
     assert len(rec) == RECENT_LIMIT
     assert rec[0]["tmdb_id"] == 2 + RECENT_LIMIT + 4  # furthest down the sheet first
+
+
+def test_viewings_log_lists_every_viewing_newest_first(sheet_values, metadata):
+    viewings, _ = parse_rows(sheet_values)
+    log = viewings_log(viewings, metadata, generated_at=GENERATED_AT)
+
+    assert log["schema_version"] == 1
+    assert log["generated_at"] == "2026-02-04T05:00:03Z"
+    assert log["count"] == len(viewings) == len(log["viewings"])
+    dates = [v["watched_date"] for v in log["viewings"]]
+    assert dates == sorted(dates, reverse=True)
+    # Same shape as `recent`, which is just the head of the log.
+    assert log["viewings"][:RECENT_LIMIT] == recent(viewings, metadata)
+    assert all("notes" not in v for v in log["viewings"])

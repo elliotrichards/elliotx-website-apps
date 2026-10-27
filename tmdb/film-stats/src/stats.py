@@ -28,7 +28,7 @@ def compute_stats(viewings, metadata, *, today, generated_at, warnings=()):
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": generated_at.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "generated_at": _utc_iso(generated_at),
         "warnings": list(warnings),
         "totals": totals(viewings, metadata),
         "by_year": by_year(viewings, today),
@@ -163,6 +163,21 @@ def ratings(viewings):
     }
 
 
+def viewings_log(viewings, metadata, *, generated_at):
+    """
+    The whole watch log for /data/movies/log: every viewing, newest first,
+    in the same row shape as `recent`. Published as its own file so the
+    dashboard's stats.json stays small however long the log gets.
+    """
+    rows = recent(viewings, metadata, limit=None)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": _utc_iso(generated_at),
+        "count": len(rows),
+        "viewings": rows,
+    }
+
+
 def recent(viewings, metadata, limit=RECENT_LIMIT):
     # Same-day viewings: the row further down the sheet counts as the later watch.
     latest = sorted(viewings, key=lambda v: (v.watched_date, v.row), reverse=True)[:limit]
@@ -181,6 +196,10 @@ def recent(viewings, metadata, limit=RECENT_LIMIT):
             }
         )
     return out
+
+
+def _utc_iso(dt):
+    return dt.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _month_key(d):
