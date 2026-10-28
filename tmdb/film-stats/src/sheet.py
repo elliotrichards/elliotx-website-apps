@@ -17,9 +17,13 @@ FIRST_DATA_ROW = 2
 
 # Columns are found by header name, not position, so they can be in any
 # order and extra columns are ignored. notes is deliberately absent: it's
-# never looked up, so it can't leak into the output.
+# never looked up, so it can't leak into the output. public_note is the one
+# note column that is published, shown on the site next to the viewing.
 REQUIRED_HEADERS = {"tmdb_id", "watched_date"}
-OPTIONAL_HEADERS = {"title", "media_type", "rating"}
+OPTIONAL_HEADERS = {"title", "media_type", "rating", "public_note", "format"}
+
+# Longer than one line on the site is a sign the wrong column was filled in.
+PUBLIC_NOTE_MAX = 280
 
 # Sheets' date serial epoch: serial 1 is 1899-12-31, so day 0 is the 30th.
 SERIAL_EPOCH = date(1899, 12, 30)
@@ -35,6 +39,9 @@ class Viewing:
     media_type: str
     watched_date: date
     rating: float | None
+    public_note: str | None = None
+    # Free text, e.g. Cinema, Home, Streaming; the site groups by it as typed.
+    format: str | None = None
 
 
 class SheetError(Exception):
@@ -97,6 +104,10 @@ def parse_rows(values):
         raw_type = cell("media_type")
         raw_date = cell("watched_date")
         raw_rating = cell("rating")
+        public_note = _text(cell("public_note"))
+        if public_note and len(public_note) > PUBLIC_NOTE_MAX:
+            warnings.append({"row": row, "reason": f"public_note over {PUBLIC_NOTE_MAX} characters, truncated"})
+            public_note = public_note[: PUBLIC_NOTE_MAX - 1].rstrip() + "…"
 
         tmdb_id = _parse_id(raw_id)
         if tmdb_id is None:
@@ -130,6 +141,8 @@ def parse_rows(values):
                 media_type=media_type,
                 watched_date=watched,
                 rating=rating,
+                public_note=public_note,
+                format=_text(cell("format")),
             )
         )
 
@@ -156,6 +169,11 @@ def _header_columns(header_row):
 
 def _blank(value):
     return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _text(value):
+    """A trimmed string, or None for a blank cell."""
+    return None if _blank(value) else " ".join(str(value).split())
 
 
 def _parse_id(value):

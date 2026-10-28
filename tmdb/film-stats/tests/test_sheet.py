@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from sheet import SheetError, parse_rows
+from sheet import PUBLIC_NOTE_MAX, SheetError, parse_rows
 
 HEADER = ["title", "tmdb_id", "media_type", "watched_date", "rating", "notes"]
 
@@ -126,3 +126,27 @@ def test_empty_sheet_fails_the_run():
 
 def test_header_only_sheet_is_an_empty_log():
     assert parse_rows([HEADER]) == ([], [])
+
+
+# --- published optional columns ---
+
+
+def test_public_note_and_format_are_kept_but_notes_are_not():
+    values = [
+        ["watched_date", "tmdb_id", "notes", "Public Note", "Format"],
+        ["2026-10-04", 652, "private", "  Better than  I remembered ", "Cinema"],
+        ["2026-10-05", 653, "", "", ""],
+    ]
+    viewings, warnings = parse_rows(values)
+    assert warnings == []
+    assert (viewings[0].public_note, viewings[0].format) == ("Better than I remembered", "Cinema")
+    assert (viewings[1].public_note, viewings[1].format) == (None, None)
+    assert "private" not in repr(viewings)
+
+
+def test_overlong_public_note_is_truncated_with_a_warning():
+    values = [["watched_date", "tmdb_id", "public_note"], ["2026-10-04", 652, "x" * 400]]
+    viewings, warnings = parse_rows(values)
+    assert len(viewings[0].public_note) == PUBLIC_NOTE_MAX
+    assert viewings[0].public_note.endswith("…")
+    assert "truncated" in warnings[0]["reason"]

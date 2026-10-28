@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from google.cloud import storage
 
+import films
 import publish
 import sheet
 import stats
@@ -25,6 +26,7 @@ def run():
     stats_bucket = os.environ["STATS_BUCKET"]
     stats_object = os.environ.get("STATS_OBJECT", "stats.json")
     viewings_object = os.environ.get("VIEWINGS_OBJECT", "viewings.json")
+    films_object = os.environ.get("FILMS_OBJECT", "films.json")
     # "Today" for streaks and month filling is the watcher's local date, not UTC.
     time_zone = ZoneInfo(os.environ.get("TIME_ZONE", "Europe/London"))
 
@@ -45,8 +47,10 @@ def run():
         warnings=row_warnings + tmdb_warnings,
     )
     log = stats.viewings_log(viewings, metadata, generated_at=now)
-    # The log first: stats.json is what the site's pull checks, so once it
-    # changes, the matching log is already in place.
+    export = films.films_export(viewings, metadata, generated_at=now, warnings=payload["warnings"])
+    # stats.json last: the site's pull checks the others against its count,
+    # so once it changes, the matching log and films.json are already in place.
+    films_size = publish.publish(gcs.bucket(stats_bucket), export, films_object)
     log_size = publish.publish(gcs.bucket(stats_bucket), log, viewings_object)
     size = publish.publish(gcs.bucket(stats_bucket), payload, stats_object)
 
@@ -61,6 +65,7 @@ def run():
         "cache_hits": cache_hits,
         "bytes": size,
         "log_bytes": log_size,
+        "films_bytes": films_size,
     }
     print(f"film-stats run: {json.dumps(summary)}")
     if size > SIZE_WARNING_BYTES:
