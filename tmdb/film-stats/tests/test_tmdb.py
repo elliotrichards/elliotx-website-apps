@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import requests
@@ -71,8 +72,28 @@ MOVIE = {
     "poster_path": "/m.jpg",
     "original_language": "en",
     "vote_average": 8.2,
-    "overview": "dropped by trim",
-    "credits": {"crew": [{"job": "Director", "name": "Lana Wachowski"}, {"job": "Writer", "name": "x"}]},
+    "overview": "A hacker learns the truth.",
+    "popularity": 99.1,
+    "imdb_id": "tt0133093",
+    "vote_count": 27000,
+    "production_countries": [{"iso_3166_1": "US", "name": "United States of America"}],
+    "belongs_to_collection": {"id": 2344, "name": "The Matrix Collection", "poster_path": "/c.jpg"},
+    "credits": {
+        "crew": [
+            {"id": 9339, "job": "Director", "name": "Lana Wachowski"},
+            {"id": 9339, "job": "Director", "name": "Lana Wachowski"},
+            {"id": 1, "job": "Writer", "name": "x"},
+        ],
+        "cast": [
+            {"id": 6384 + i, "name": f"Actor {i}", "character": f"Role {i}", "order": i} for i in range(10, 0, -1)
+        ],
+    },
+    "release_dates": {
+        "results": [
+            {"iso_3166_1": "US", "release_dates": [{"certification": "R"}]},
+            {"iso_3166_1": "GB", "release_dates": [{"certification": ""}, {"certification": "15"}]},
+        ]
+    },
 }
 
 
@@ -83,9 +104,34 @@ def client(responses):
 
 def test_trim_movie_keeps_only_needed_fields():
     t = tmdb.trim("movie", MOVIE)
-    assert t["directors"] == ["Lana Wachowski"]
+    assert t["directors"] == [{"id": 9339, "name": "Lana Wachowski"}]
     assert t["genres"] == ["Action"]
-    assert "overview" not in t
+    assert t["overview"] == "A hacker learns the truth."
+    assert t["countries"] == ["US"]
+    assert t["collection"] == {"id": 2344, "name": "The Matrix Collection"}
+    assert (t["certification"], t["imdb_id"], t["vote_count"]) == ("15", "tt0133093", 27000)
+    assert "popularity" not in t and "credits" not in t
+
+
+def test_trim_keeps_top_billed_cast_in_billing_order():
+    cast = tmdb.trim("movie", MOVIE)["cast"]
+    assert len(cast) == tmdb.CAST_LIMIT
+    assert [c["name"] for c in cast[:2]] == ["Actor 1", "Actor 2"]
+    assert cast[0] == {"id": 6385, "name": "Actor 1", "character": "Role 1", "profile_path": None}
+
+
+def test_trim_movie_without_gb_certification_or_collection():
+    t = tmdb.trim("movie", {"title": "x", "release_dates": {"results": [{"iso_3166_1": "US"}]}})
+    assert (t["certification"], t["collection"], t["cast"], t["tagline"]) == (None, None, [], None)
+
+
+def test_fetch_appends_credits_and_certifications_per_media_type():
+    c, session = client([FakeResponse(200, MOVIE), FakeResponse(200, {"name": "Show"})])
+    seen = []
+    session.get = lambda url, **kw: (seen.append(kw["params"]["append_to_response"]), session._responses.pop(0))[1]
+    c.fetch("movie", 603)
+    c.fetch("tv", 1396)
+    assert seen == ["credits,release_dates", "credits,content_ratings,external_ids"]
 
 
 def test_trim_tv_splits_combined_genres_and_uses_creators():
@@ -95,12 +141,17 @@ def test_trim_tv_splits_combined_genres_and_uses_creators():
         "episode_run_time": [],
         "last_episode_to_air": {"runtime": 52},
         "genres": [{"name": "Sci-Fi & Fantasy"}, {"name": "Drama"}],
-        "created_by": [{"name": "Creator"}],
+        "created_by": [{"id": 66633, "name": "Creator"}],
+        "origin_country": ["US"],
+        "number_of_seasons": 5,
+        "content_ratings": {"results": [{"iso_3166_1": "GB", "rating": "18"}]},
+        "external_ids": {"imdb_id": "tt0903747"},
     }
     t = tmdb.trim("tv", raw)
     assert t["genres"] == ["Science Fiction", "Fantasy", "Drama"]
     assert t["runtime"] == 52
-    assert t["creators"] == ["Creator"] and t["directors"] == []
+    assert t["creators"] == [{"id": 66633, "name": "Creator"}] and t["directors"] == []
+    assert (t["countries"], t["certification"], t["imdb_id"], t["seasons"]) == (["US"], "18", "tt0903747", 5)
 
 
 def test_fetch_retries_rate_limit_then_succeeds():
@@ -220,6 +271,25 @@ def test_gcs_cache_round_trips_one_index_object():
     cache.save({("movie", 603): ({"title": "x"}, NOW), ("tv", 1396): ({"title": "y"}, NOW)})
     assert list(bucket.store) == [tmdb.GcsCache.INDEX_PATH]
     assert cache.load() == {("movie", 603): ({"title": "x"}, NOW), ("tv", 1396): ({"title": "y"}, NOW)}
+
+
+def test_gcs_cache_marks_entries_from_an_older_trim_as_stalest():
+    bucket = FakeBucket()
+    bucket.store[tmdb.GcsCache.INDEX_PATH] = json.dumps(
+        {"movie/603": {"cached_at": NOW.isoformat(), "data": {"title": "v1"}}}  # no version: trimmed by v1
+    )
+    data, cached_at = tmdb.GcsCache(bucket).load()[("movie", 603)]
+    assert data == {"title": "v1"}
+    assert cached_at == datetime.min.replace(tzinfo=UTC)
+
+
+def test_enrich_refreshes_old_trim_entries_before_other_stale_ones():
+    stale = NOW - tmdb.CACHE_MAX_AGE - timedelta(days=1)
+    epoch = datetime.min.replace(tzinfo=UTC)
+    cache = MemoryCache({("movie", 1): ({"title": "stale"}, stale), ("movie", 2): ({"title": "v1"}, epoch)})
+    client = FakeClient(default=MOVIE)
+    tmdb.enrich([("movie", 1), ("movie", 2)], client, cache, now=NOW, max_fetches=1)
+    assert client.fetched == [("movie", 2)]
 
 
 def test_gcs_cache_treats_a_corrupt_index_as_empty():

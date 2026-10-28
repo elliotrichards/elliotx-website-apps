@@ -35,8 +35,8 @@ def compute_stats(viewings, metadata, *, today, generated_at, warnings=()):
         "by_month": by_month(viewings, today),
         "genres": ranked(g for _, m in with_meta for g in m.get("genres", [])),
         "decades": decades(m.get("release_date") for _, m in with_meta),
-        "directors": ranked(d for _, m in with_meta for d in m.get("directors", []))[:TOP_PEOPLE],
-        "creators": ranked(c for _, m in with_meta for c in m.get("creators", []))[:TOP_PEOPLE],
+        "directors": ranked(d for _, m in with_meta for d in names(m.get("directors", [])))[:TOP_PEOPLE],
+        "creators": ranked(c for _, m in with_meta for c in names(m.get("creators", [])))[:TOP_PEOPLE],
         "languages": ranked(m["original_language"] for _, m in with_meta if m.get("original_language")),
         "streaks": streaks([v.watched_date for v in viewings], today),
         "busiest": busiest(viewings),
@@ -83,6 +83,11 @@ def by_month(viewings, today):
         months.append({"month": key, "count": counts.get(key, 0)})
         cursor = _next_month(cursor)
     return months
+
+
+def names(people):
+    """Person names from trimmed metadata: {id, name} now, plain strings in entries cached before that."""
+    return [p["name"] if isinstance(p, dict) else p for p in people]
 
 
 def ranked(items):

@@ -21,6 +21,21 @@ FETCH_WORKERS = 4
 # anything over the cap waits for a later run (see enrich).
 MAX_FETCHES_PER_RUN = 600
 
+# Bumped whenever trim() keeps new fields. Entries cached under an older
+# version are treated as the stalest of all: still used, but refreshed first.
+TRIM_VERSION = 2
+
+# Top-billed cast kept per title, for the site's film pages.
+CAST_LIMIT = 8
+
+# Certification country: the site's audience is in the UK.
+CERTIFICATION_COUNTRY = "GB"
+
+# Extra responses fetched in the same request. release_dates (movies) and
+# content_ratings (TV) carry certifications; TV keeps its IMDb ID in
+# external_ids, where a movie has it at the top level.
+APPEND = {"movie": "credits,release_dates", "tv": "credits,content_ratings,external_ids"}
+
 # Cached entries are refreshed after this long so vote averages and posters
 # don't go permanently stale. A failed refresh falls back to the stale copy.
 CACHE_MAX_AGE = timedelta(days=30)
@@ -51,7 +66,10 @@ class TmdbClient:
         self.calls = 0
 
     def fetch(self, media_type, tmdb_id):
-        """GET /{movie|tv}/{id} with credits. Retries 429/5xx and network errors with backoff; 404 is final."""
+        """
+        GET /{movie|tv}/{id} with credits and certifications. Retries 429/5xx
+        and network errors with backoff; 404 is final.
+        """
         url = f"{API_BASE}/{media_type}/{tmdb_id}"
         last_error = None
 
@@ -60,7 +78,7 @@ class TmdbClient:
             with self._lock:  # fetch runs on several threads at once
                 self.calls += 1
             try:
-                r = self._session.get(url, params={"append_to_response": "credits"}, timeout=20)
+                r = self._session.get(url, params={"append_to_response": APPEND[media_type]}, timeout=20)
             except requests.RequestException as exc:
                 last_error = f"network error: {exc}"
                 if attempt < MAX_ATTEMPTS:
@@ -82,7 +100,23 @@ class TmdbClient:
 
 
 def trim(media_type, raw):
-    """Keeps only the fields the stats need, in one shape for both movies and TV."""
+    """
+    Keeps only the fields the stats and the site's film pages need, in one
+    shape for both movies and TV. People are {id, name} so the site can tell
+    two people with the same name apart.
+    """
+    shared = {
+        "media_type": media_type,
+        "tagline": raw.get("tagline") or None,
+        "overview": raw.get("overview") or None,
+        "poster_path": raw.get("poster_path"),
+        "backdrop_path": raw.get("backdrop_path"),
+        "original_language": raw.get("original_language"),
+        "vote_average": raw.get("vote_average"),
+        "vote_count": raw.get("vote_count"),
+        "cast": _cast(raw),
+    }
+
     if media_type == "tv":
         genres = []
         for g in raw.get("genres", []):
@@ -90,30 +124,38 @@ def trim(media_type, raw):
         # Shows rarely have a show-level Director credit; creators are the
         # closest equivalent and are reported separately from film directors.
         return {
-            "media_type": "tv",
+            **shared,
             "title": raw.get("name") or raw.get("original_name"),
+            "original_title": raw.get("original_name"),
             "release_date": raw.get("first_air_date") or None,
             "runtime": _tv_runtime(raw),
             "genres": list(dict.fromkeys(genres)),
             "directors": [],
-            "creators": [c["name"] for c in raw.get("created_by", [])],
-            "poster_path": raw.get("poster_path"),
-            "original_language": raw.get("original_language"),
-            "vote_average": raw.get("vote_average"),
+            "creators": [_person(c) for c in raw.get("created_by", [])],
+            "countries": list(raw.get("origin_country") or []),
+            "collection": None,
+            "certification": _tv_certification(raw),
+            "imdb_id": (raw.get("external_ids") or {}).get("imdb_id") or None,
+            "seasons": raw.get("number_of_seasons"),
+            "episodes": raw.get("number_of_episodes"),
         }
 
     crew = raw.get("credits", {}).get("crew", [])
+    directors = {c.get("id") or c.get("name"): _person(c) for c in crew if c.get("job") == "Director"}
+    collection = raw.get("belongs_to_collection")
     return {
-        "media_type": "movie",
+        **shared,
         "title": raw.get("title") or raw.get("original_title"),
+        "original_title": raw.get("original_title"),
         "release_date": raw.get("release_date") or None,
         "runtime": raw.get("runtime") or None,
         "genres": [g["name"] for g in raw.get("genres", [])],
-        "directors": list(dict.fromkeys(c["name"] for c in crew if c.get("job") == "Director")),
+        "directors": list(directors.values()),
         "creators": [],
-        "poster_path": raw.get("poster_path"),
-        "original_language": raw.get("original_language"),
-        "vote_average": raw.get("vote_average"),
+        "countries": [c["iso_3166_1"] for c in raw.get("production_countries", []) if c.get("iso_3166_1")],
+        "collection": {"id": collection["id"], "name": collection.get("name")} if collection else None,
+        "certification": _movie_certification(raw),
+        "imdb_id": raw.get("imdb_id") or None,
     }
 
 
@@ -133,7 +175,7 @@ class GcsCache:
         """{(media_type, id): (data, cached_at)}; empty if there's no index yet or it's unreadable."""
         try:
             raw = json.loads(self._bucket.blob(self.INDEX_PATH).download_as_text())
-            return {_parse_key(k): (v["data"], datetime.fromisoformat(v["cached_at"])) for k, v in raw.items()}
+            return {_parse_key(k): (v["data"], _cached_at(v)) for k, v in raw.items()}
         except gcs_exceptions.NotFound:
             return {}
         except (ValueError, KeyError, TypeError, AttributeError):
@@ -141,7 +183,10 @@ class GcsCache:
             return {}
 
     def save(self, entries):
-        body = {f"{mt}/{tid}": {"cached_at": at.isoformat(), "data": data} for (mt, tid), (data, at) in entries.items()}
+        body = {
+            f"{mt}/{tid}": {"cached_at": at.isoformat(), "version": TRIM_VERSION, "data": data}
+            for (mt, tid), (data, at) in entries.items()
+        }
         self._bucket.blob(self.INDEX_PATH).upload_from_string(
             json.dumps(body, separators=(",", ":")),
             content_type="application/json",
@@ -208,6 +253,49 @@ def enrich(keys, client, cache, now=None, max_fetches=MAX_FETCHES_PER_RUN, worke
 
     cache_hits = len(metadata) - fetched
     return metadata, warnings, cache_hits
+
+
+def _cached_at(entry):
+    """An entry trimmed by an older trim() counts as cached at the epoch, so it's refreshed before any other."""
+    if entry.get("version") != TRIM_VERSION:
+        return datetime.min.replace(tzinfo=UTC)
+    return datetime.fromisoformat(entry["cached_at"])
+
+
+def _person(raw):
+    return {"id": raw.get("id"), "name": raw.get("name")}
+
+
+def _cast(raw):
+    cast = sorted(raw.get("credits", {}).get("cast", []), key=lambda c: c.get("order", 0))
+    return [
+        {
+            "id": c.get("id"),
+            "name": c.get("name"),
+            "character": c.get("character") or None,
+            "profile_path": c.get("profile_path"),
+        }
+        for c in cast[:CAST_LIMIT]
+    ]
+
+
+def _movie_certification(raw):
+    for country in (raw.get("release_dates") or {}).get("results", []):
+        if country.get("iso_3166_1") != CERTIFICATION_COUNTRY:
+            continue
+        # One entry per release type (premiere, theatrical, digital...); any
+        # non-blank one will do, they almost always agree.
+        for release in country.get("release_dates", []):
+            if release.get("certification"):
+                return release["certification"]
+    return None
+
+
+def _tv_certification(raw):
+    for rating in (raw.get("content_ratings") or {}).get("results", []):
+        if rating.get("iso_3166_1") == CERTIFICATION_COUNTRY and rating.get("rating"):
+            return rating["rating"]
+    return None
 
 
 def _parse_key(key):

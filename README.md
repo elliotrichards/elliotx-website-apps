@@ -161,7 +161,7 @@ Cloud Scheduler (05:00 Europe/London)
                             --Sheets API, ADC, read-only scope-->  Google Sheet ("Watch Log" tab)
                             --GET /{movie|tv}/{id}-->  TMDB API (token via secret_key_ref)
                             --tmdb/index.json-->  GCS elliotx-film-tmdb-cache (private)
-                            --stats.json + viewings.json-->  GCS elliotx-film-stats-public (allUsers read, CORS: elliotx.com)
+                            --stats.json + viewings.json + films.json-->  GCS elliotx-film-stats-public (allUsers read, CORS: elliotx.com)
 ```
 
 Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Run, Secret Manager `secret_key_ref`), with its own Terraform state in `elliotx-website-terraform/film-stats`. Unlike `recent-tracks` it has real Python tooling: the PR job runs `ruff format --check`, `ruff check` and `pytest` inline (not `lint-app.yml`, which is Node-only).
@@ -171,8 +171,9 @@ Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Ru
 - `src/sheet.py`: reads the sheet and validates rows. Dates are requested as serial numbers, not formatted strings, so the sheet's locale can't make `03/04` ambiguous. Text cells in ISO `YYYY-MM-DD` still parse.
 - `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of *trimmed* responses in one index object (`tmdb/index.json`), read once and written once per run. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are used as-is and refreshed when there's room, and the old copy is kept if TMDB is down.
 - **Lookup budget**: at most 600 TMDB lookups per run (`MAX_FETCHES_PER_RUN`), four at a time, which is about 40s against the service's 120s timeout. Titles with no cache entry come first, then the stalest. Anything over the cap still counts in the totals, gets one combined "N titles are waiting for a TMDB lookup" warning, and is filled in by later runs. So a big backfill catches up over a few days on its own; trigger the Scheduler job by hand to speed it up.
-- `src/stats.py`: pure functions with no I/O and no clock reads, so they're fully unit-tested.
-- `src/publish.py`: uploads under `_staging/`, then server-side copies over the live object with `Cache-Control: public, max-age=3600`. Used for both published files.
+- **Trim version**: each cache entry records the `TRIM_VERSION` that trimmed it. Bumping it (whenever `trim()` keeps new fields) makes every older entry count as the stalest of all, so they're refreshed first, within the usual lookup budget, and still used until then.
+- `src/stats.py` and `src/films.py`: pure functions with no I/O and no clock reads, so they're fully unit-tested.
+- `src/publish.py`: uploads under `_staging/`, then server-side copies over the live object with `Cache-Control: public, max-age=3600`. Used for all three published files.
 
 ### Sheet contract
 
@@ -185,11 +186,23 @@ Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row wi
 | `title` | No | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing. |
 | `media_type` | No | `movie` or `tv`; blank (or no column) means `movie` |
 | `rating` | No | 0.5–5 in half steps |
+| `public_note` | No | One line, **published** on the site next to the viewing. Over 280 characters is truncated with a warning |
+| `format` | No | Free text such as `Cinema`, `Home` or `Streaming`, published as typed |
 | `notes` | No | **Never** published: the app never looks this column up |
 
 A missing required header, a duplicated header or an empty tab fails the run, which triggers the alert, rather than publishing an empty `stats.json`.
 
 Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknown `media_type` or an unparseable date is skipped, and an invalid rating is dropped while the viewing is kept. Each of these goes into `stats.json`'s `warnings` with its sheet row number, and none of them fail the run. A title TMDB can't resolve also becomes a warning: it still counts toward totals, dates, streaks and ratings, just not genres, decades or people.
+
+### `films.json` (schemaVersion 2)
+
+The data behind the redesigned `/data/movies` pages. It does no aggregating: the site computes its own stats at build time, so new charts don't need a change here. Keys are camelCase.
+
+- `viewings`: every viewing, oldest first by watch date then sheet row (backfilled rows can sit anywhere in the sheet). Each one has `id` (`2026-10-25-movie-1288445`, with `-2` for a same-day repeat), `mediaType`, `tmdbId`, `watchedOn`, `order` (position within the day), `rating`, `rewatch` (an earlier viewing exists), `note` (from `public_note`) and `format`.
+- `films`: one entry per title, keyed `movie/603` or `tv/1396` because a movie and a show can share an ID. Title, original title, release date, runtime (per episode for TV), genres, directors and creators (`{id, name}`), top 8 cast, language, countries, tagline, overview, poster and backdrop paths, TMDB vote average and count, collection, GB certification, IMDb ID, and seasons/episodes for TV. A title TMDB couldn't resolve is still listed, with the sheet's title and everything else null.
+- `warnings`, `attribution`, `generatedAt`.
+
+Published first, before `viewings.json` and `stats.json`. It's public, so `public_note` is the only note column it reads.
 
 ### `viewings.json` (schema_version 1)
 

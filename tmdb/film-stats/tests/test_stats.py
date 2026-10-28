@@ -209,3 +209,9 @@ def test_viewings_log_lists_every_viewing_newest_first(sheet_values, metadata):
     # Same shape as `recent`, which is just the head of the log.
     assert log["viewings"][:RECENT_LIMIT] == recent(viewings, metadata)
     assert all("notes" not in v for v in log["viewings"])
+
+
+def test_people_with_ids_count_by_name(metadata):
+    meta = {**metadata, ("movie", 603): {**metadata[("movie", 603)], "directors": [{"id": 9339, "name": "Lana W"}]}}
+    out = compute_stats([v(2, 603, date(2026, 1, 1))], meta, today=TODAY, generated_at=GENERATED_AT)
+    assert out["directors"] == [{"name": "Lana W", "count": 1}]
