@@ -185,20 +185,21 @@ Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row wi
 | `watched_date` | Yes | Real date cell, or text `YYYY-MM-DD` |
 | `title` | No | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing. |
 | `media_type` | No | `movie` or `tv`; blank (or no column) means `movie` |
-| `rating` | No | 0.5–5 in half steps |
+| `score` | No | My rating out of 10, a whole number from 1 to 10 |
+| `rating` | No | Old column, 0.5–5 in half steps. Used, doubled, only for a row with no `score`; delete it once every row has one |
 | `public_note` | No | One line, **published** on the site next to the viewing. Over 280 characters is truncated with a warning |
 | `format` | No | Free text such as `Cinema`, `Home` or `Streaming`, published as typed |
 | `notes` | No | **Never** published: the app never looks this column up |
 
 A missing required header, a duplicated header or an empty tab fails the run, which triggers the alert, rather than publishing an empty `films.json`.
 
-Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknown `media_type` or an unparseable date is skipped, and an invalid rating is dropped while the viewing is kept. Each of these goes into `films.json`'s `warnings` with its sheet row number, and none of them fail the run. A title TMDB can't resolve also becomes a warning: its viewings are still published, with the sheet's title and no metadata.
+Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknown `media_type` or an unparseable date is skipped, and an invalid score or rating is dropped while the viewing is kept (scored from the other column if that one is valid). Each of these goes into `films.json`'s `warnings` with its sheet row number, and none of them fail the run. A title TMDB can't resolve also becomes a warning: its viewings are still published, with the sheet's title and no metadata.
 
-### `films.json` (schemaVersion 2)
+### `films.json` (schemaVersion 3)
 
 The data behind the site's `/data/movies` pages. It does no aggregating: the site computes its own stats at build time, so new charts don't need a change here. Keys are camelCase.
 
-- `viewings`: every viewing, oldest first by watch date then sheet row (backfilled rows can sit anywhere in the sheet). Each one has `id` (`2026-10-25-movie-1288445`, with `-2` for a same-day repeat), `mediaType`, `tmdbId`, `watchedOn`, `order` (position within the day), `rating`, `rewatch` (an earlier viewing exists), `note` (from `public_note`) and `format`.
+- `viewings`: every viewing, oldest first by watch date then sheet row (backfilled rows can sit anywhere in the sheet). Each one has `id` (`2026-10-25-movie-1288445`, with `-2` for a same-day repeat), `mediaType`, `tmdbId`, `watchedOn`, `order` (position within the day), `score` (1–10, or null if unrated; schema 2 had `rating`, 0.5–5, here instead), `rewatch` (an earlier viewing exists), `note` (from `public_note`) and `format`.
 - `films`: one entry per title, keyed `movie/603` or `tv/1396` because a movie and a show can share an ID. Title, original title, release date, runtime (per episode for TV), genres, directors and creators (`{id, name}`), top 8 cast, language, countries, tagline, overview, poster and backdrop paths, TMDB vote average and count, collection, GB certification, IMDb ID, and seasons/episodes for TV. A title TMDB couldn't resolve is still listed, with the sheet's title and everything else null.
 - `warnings`, `attribution`, `generatedAt`.
 

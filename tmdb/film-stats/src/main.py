@@ -35,7 +35,7 @@ def run():
     summary = {
         "rows_read": max(len(values) - 1, 0),  # excluding the header row
         "viewings": len(viewings),
-        # A bad rating warns but keeps its row, so not every warned row was skipped.
+        # A bad score or rating warns but keeps its row, so not every warned row was skipped.
         "rows_skipped": len({w["row"] for w in row_warnings} - {v.row for v in viewings}),
         "warnings": len(warnings),
         "titles": len(keys),
