@@ -28,8 +28,21 @@ def run():
     keys = sorted({(v.media_type, v.tmdb_id) for v in viewings})
     metadata, tmdb_warnings, cache_hits = tmdb.enrich(keys, client, tmdb.GcsCache(gcs.bucket(cache_bucket)))
 
-    warnings = row_warnings + tmdb_warnings
-    export = films.films_export(viewings, metadata, generated_at=datetime.now(UTC), warnings=warnings)
+    # Episode titles for TV rows that say which episode. Seasons get what's
+    # left of the run's lookup budget once titles have had theirs.
+    wanted = {}
+    for v in viewings:
+        if v.media_type == "tv" and v.episode is not None:
+            wanted.setdefault((v.tmdb_id, v.season), set()).add(v.episode)
+    seasons, season_warnings = tmdb.enrich_seasons(
+        wanted,
+        client,
+        tmdb.SeasonCache(gcs.bucket(cache_bucket)),
+        max_fetches=tmdb.MAX_FETCHES_PER_RUN - client.calls,
+    )
+
+    warnings = row_warnings + tmdb_warnings + season_warnings
+    export = films.films_export(viewings, metadata, generated_at=datetime.now(UTC), warnings=warnings, seasons=seasons)
     size = publish.publish(gcs.bucket(stats_bucket), export, films_object)
 
     summary = {
@@ -39,6 +52,7 @@ def run():
         "rows_skipped": len({w["row"] for w in row_warnings} - {v.row for v in viewings}),
         "warnings": len(warnings),
         "titles": len(keys),
+        "seasons": len(wanted),
         "tmdb_calls": client.calls,
         "cache_hits": cache_hits,
         "bytes": size,

@@ -13,12 +13,13 @@ from datetime import UTC
 
 # 3: viewings carry score (1 to 10) in place of rating (0.5 to 5).
 # 4: viewings carry season and episode (TV, or null), and a TV rewatch is the
-#    same episode again rather than any earlier episode of the show.
+#    same episode again rather than any earlier episode of the show. Shows
+#    later gained watchedEpisodes; being an optional extra, that's still 4.
 SCHEMA_VERSION = 4
 TMDB_ATTRIBUTION = "This product uses the TMDB API but is not endorsed or certified by TMDB."
 
 
-def films_export(viewings, metadata, *, generated_at, warnings=()):
+def films_export(viewings, metadata, *, generated_at, warnings=(), seasons=None):
     return {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": _utc_iso(generated_at),
@@ -26,7 +27,15 @@ def films_export(viewings, metadata, *, generated_at, warnings=()):
         "attribution": TMDB_ATTRIBUTION,
         "viewings": export_viewings(viewings),
         "films": {
-            f"{media_type}/{tmdb_id}": export_film(metadata.get((media_type, tmdb_id)), fallback_title=title)
+            f"{media_type}/{tmdb_id}": export_film(
+                metadata.get((media_type, tmdb_id)),
+                fallback_title=title,
+                **(
+                    {"watched_episodes": _watched_episodes(viewings, tmdb_id, seasons or {})}
+                    if media_type == "tv"
+                    else {}
+                ),
+            )
             for (media_type, tmdb_id), title in _titles(viewings).items()
         },
     }
@@ -71,10 +80,13 @@ def export_viewings(viewings):
     return out
 
 
-def export_film(m, fallback_title=None):
-    """One film or show. With no metadata (TMDB lookup failed) every field is null but the sheet's title."""
+def export_film(m, fallback_title=None, watched_episodes=None):
+    """
+    One film or show. With no metadata (TMDB lookup failed) every field is null
+    but the sheet's title. A show also gets watchedEpisodes (see below).
+    """
     m = m or {}
-    return {
+    film = {
         "mediaType": m.get("media_type"),
         "title": m.get("title") or fallback_title or None,
         "originalTitle": m.get("original_title"),
@@ -106,6 +118,26 @@ def export_film(m, fallback_title=None):
         "seasons": m.get("seasons"),
         "episodes": m.get("episodes"),
     }
+    if watched_episodes is not None:
+        film["watchedEpisodes"] = watched_episodes
+    return film
+
+
+def _watched_episodes(viewings, tmdb_id, seasons):
+    """
+    {"2/5": {name, airDate, runtime}} for each episode of this show that's in
+    the log and that TMDB knows: only watched ones, so a long-running show
+    doesn't bloat the file. Viewings stay as the sheet has them; TMDB's
+    details live here with the rest of the show's metadata.
+    """
+    out = {}
+    for v in viewings:
+        if v.media_type != "tv" or v.tmdb_id != tmdb_id or v.episode is None:
+            continue
+        e = (seasons.get((tmdb_id, v.season)) or {}).get(str(v.episode))
+        if e is not None:
+            out[f"{v.season}/{v.episode}"] = {"name": e["name"], "airDate": e["air_date"], "runtime": e["runtime"]}
+    return dict(sorted(out.items(), key=lambda kv: tuple(int(n) for n in kv[0].split("/"))))
 
 
 def _people(people):

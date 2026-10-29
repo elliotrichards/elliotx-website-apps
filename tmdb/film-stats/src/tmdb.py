@@ -24,6 +24,8 @@ MAX_FETCHES_PER_RUN = 600
 # Bumped whenever trim() keeps new fields. Entries cached under an older
 # version are treated as the stalest of all: still used, but refreshed first.
 TRIM_VERSION = 2
+# The same for trim_season().
+SEASON_TRIM_VERSION = 1
 
 # Top-billed cast kept per title, for the site's film pages.
 CAST_LIMIT = 8
@@ -66,11 +68,25 @@ class TmdbClient:
         self.calls = 0
 
     def fetch(self, media_type, tmdb_id):
-        """
-        GET /{movie|tv}/{id} with credits and certifications. Retries 429/5xx
-        and network errors with backoff; 404 is final.
-        """
-        url = f"{API_BASE}/{media_type}/{tmdb_id}"
+        """GET /{movie|tv}/{id} with credits and certifications."""
+        return self._get(
+            f"{API_BASE}/{media_type}/{tmdb_id}",
+            {"append_to_response": APPEND[media_type]},
+            what=f"{media_type}/{tmdb_id}",
+            not_found=f"TMDB has no {media_type} with id {tmdb_id}",
+        )
+
+    def fetch_season(self, tmdb_id, season):
+        """GET /tv/{id}/season/{n}: every episode of one season of a show."""
+        return self._get(
+            f"{API_BASE}/tv/{tmdb_id}/season/{season}",
+            {},
+            what=f"tv/{tmdb_id} season {season}",
+            not_found=f"TMDB has no season {season} of tv/{tmdb_id}",
+        )
+
+    def _get(self, url, params, *, what, not_found):
+        """Retries 429/5xx and network errors with backoff; 404 is final."""
         last_error = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -78,7 +94,7 @@ class TmdbClient:
             with self._lock:  # fetch runs on several threads at once
                 self.calls += 1
             try:
-                r = self._session.get(url, params={"append_to_response": APPEND[media_type]}, timeout=20)
+                r = self._session.get(url, params=params, timeout=20)
             except requests.RequestException as exc:
                 last_error = f"network error: {exc}"
                 if attempt < MAX_ATTEMPTS:
@@ -86,17 +102,17 @@ class TmdbClient:
                 continue
 
             if r.status_code == 404:
-                raise TmdbNotFound(f"TMDB has no {media_type} with id {tmdb_id}")
+                raise TmdbNotFound(not_found)
             if r.status_code == 429 or r.status_code >= 500:
                 last_error = f"HTTP {r.status_code}"
                 if attempt < MAX_ATTEMPTS:
                     self._sleep(min(_retry_after(r) or 2**attempt, 30))
                 continue
             if not r.ok:
-                raise TmdbError(f"HTTP {r.status_code} for {media_type}/{tmdb_id}")
+                raise TmdbError(f"HTTP {r.status_code} for {what}")
             return r.json()
 
-        raise TmdbError(f"gave up on {media_type}/{tmdb_id} after {MAX_ATTEMPTS} attempts ({last_error})")
+        raise TmdbError(f"gave up on {what} after {MAX_ATTEMPTS} attempts ({last_error})")
 
 
 def trim(media_type, raw):
@@ -159,6 +175,23 @@ def trim(media_type, raw):
     }
 
 
+def trim_season(raw):
+    """
+    {episode number: {name, air_date, runtime}} for one season. The overview
+    is left out (it would spoil the log) and so is the still, which nothing
+    shows. Keys are strings, as they'll be in JSON.
+    """
+    return {
+        str(e["episode_number"]): {
+            "name": e.get("name") or None,
+            "air_date": e.get("air_date") or None,
+            "runtime": e.get("runtime") or None,
+        }
+        for e in raw.get("episodes", [])
+        if e.get("episode_number") is not None
+    }
+
+
 class GcsCache:
     """
     One index object, tmdb/index.json, holding every trimmed entry: read once
@@ -167,6 +200,7 @@ class GcsCache:
     """
 
     INDEX_PATH = "tmdb/index.json"
+    VERSION = TRIM_VERSION
 
     def __init__(self, bucket):
         self._bucket = bucket
@@ -175,7 +209,7 @@ class GcsCache:
         """{(media_type, id): (data, cached_at)}; empty if there's no index yet or it's unreadable."""
         try:
             raw = json.loads(self._bucket.blob(self.INDEX_PATH).download_as_text())
-            return {_parse_key(k): (v["data"], _cached_at(v)) for k, v in raw.items()}
+            return {self._parse_key(k): (v["data"], _cached_at(v, self.VERSION)) for k, v in raw.items()}
         except gcs_exceptions.NotFound:
             return {}
         except (ValueError, KeyError, TypeError, AttributeError):
@@ -184,13 +218,44 @@ class GcsCache:
 
     def save(self, entries):
         body = {
-            f"{mt}/{tid}": {"cached_at": at.isoformat(), "version": TRIM_VERSION, "data": data}
-            for (mt, tid), (data, at) in entries.items()
+            self._key(key): {"cached_at": at.isoformat(), "version": self.VERSION, "data": data}
+            for key, (data, at) in entries.items()
         }
         self._bucket.blob(self.INDEX_PATH).upload_from_string(
             json.dumps(body, separators=(",", ":")),
             content_type="application/json",
         )
+
+    @staticmethod
+    def _key(key):
+        media_type, tmdb_id = key
+        return f"{media_type}/{tmdb_id}"
+
+    @staticmethod
+    def _parse_key(key):
+        media_type, tmdb_id = key.split("/")
+        return media_type, int(tmdb_id)
+
+
+class SeasonCache(GcsCache):
+    """
+    Seasons, keyed (show id, season), in their own index object: the title
+    index's loader reads every key as "type/id", so a season key there would
+    make an older build of the job treat the whole cache as corrupt.
+    """
+
+    INDEX_PATH = "tmdb/seasons.json"
+    VERSION = SEASON_TRIM_VERSION
+
+    @staticmethod
+    def _key(key):
+        tmdb_id, season = key
+        return f"{tmdb_id}/{season}"
+
+    @staticmethod
+    def _parse_key(key):
+        tmdb_id, season = key.split("/")
+        return int(tmdb_id), int(season)
 
 
 def enrich(keys, client, cache, now=None, max_fetches=MAX_FETCHES_PER_RUN, workers=FETCH_WORKERS):
@@ -203,44 +268,17 @@ def enrich(keys, client, cache, now=None, max_fetches=MAX_FETCHES_PER_RUN, worke
     a title with neither gets a warning. Titles that didn't fit in the
     budget get one combined warning and are picked up by later runs.
     """
-    now = now or datetime.now(UTC)
-    entries = cache.load()
-    metadata, warnings = {}, []
-    missing, stale = [], []
-
-    for key in keys:
-        entry = entries.get(key)
-        if entry is None:
-            missing.append(key)
-            continue
-        data, cached_at = entry
-        metadata[key] = data
-        if now - cached_at >= CACHE_MAX_AGE:
-            stale.append(key)
-
-    stale.sort(key=lambda k: entries[k][1])
-    todo = (missing + stale)[:max_fetches]
-    deferred = len(missing) - min(len(missing), max_fetches)
-
-    def lookup(key):
-        try:
-            return trim(key[0], client.fetch(*key)), None
-        except TmdbError as exc:
-            return None, exc
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(lookup, todo))
-
-    fetched = 0
-    for (media_type, tmdb_id), (data, exc) in zip(todo, results, strict=True):
-        key = (media_type, tmdb_id)
-        if data is not None:
-            metadata[key] = data
-            entries[key] = (data, now)
-            fetched += 1
-        elif key not in metadata:
-            warnings.append({"tmdb_id": tmdb_id, "media_type": media_type, "reason": str(exc)})
-
+    metadata, failures, deferred, fetched = _fill(
+        keys,
+        cache,
+        lambda key: trim(key[0], client.fetch(*key)),
+        now=now or datetime.now(UTC),
+        max_fetches=max_fetches,
+        workers=workers,
+    )
+    warnings = [
+        {"tmdb_id": tmdb_id, "media_type": media_type, "reason": str(exc)} for (media_type, tmdb_id), exc in failures
+    ]
     if deferred:
         warnings.append(
             {
@@ -248,16 +286,105 @@ def enrich(keys, client, cache, now=None, max_fetches=MAX_FETCHES_PER_RUN, worke
                 f"(at most {max_fetches} per run); later runs will fill them in"
             }
         )
+    return metadata, warnings, len(metadata) - fetched
+
+
+def enrich_seasons(wanted, client, cache, now=None, max_fetches=MAX_FETCHES_PER_RUN, workers=FETCH_WORKERS):
+    """
+    Returns ({(show id, season): trim_season()}, warnings) for the seasons in
+    `wanted`, {(show id, season): episode numbers watched}. Cached like titles,
+    with one more reason to refetch straight away: a watched episode that
+    isn't in the cached copy (a show still airing when it was cached).
+    """
+    seasons, failures, deferred, _ = _fill(
+        sorted(wanted),
+        cache,
+        lambda key: trim_season(client.fetch_season(*key)),
+        now=now or datetime.now(UTC),
+        max_fetches=max_fetches,
+        workers=workers,
+        incomplete=lambda key, data: any(str(e) not in data for e in wanted[key]),
+    )
+    warnings = [
+        {"tmdb_id": tmdb_id, "media_type": "tv", "season": season, "reason": str(exc)}
+        for (tmdb_id, season), exc in failures
+    ]
+    for (tmdb_id, season), episodes in sorted(wanted.items()):
+        data = seasons.get((tmdb_id, season))
+        if data is None:
+            continue
+        for episode in sorted(episodes):
+            if str(episode) not in data:
+                warnings.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "media_type": "tv",
+                        "season": season,
+                        "reason": f"TMDB has no episode {episode} in season {season} of tv/{tmdb_id}",
+                    }
+                )
+    if deferred:
+        warnings.append(
+            {
+                "reason": f"{deferred} TV seasons are waiting for a TMDB lookup "
+                f"(at most {max_fetches} per run); later runs will fill them in"
+            }
+        )
+    return seasons, warnings
+
+
+def _fill(keys, cache, lookup, *, now, max_fetches, workers, incomplete=lambda key, data: False):
+    """
+    The cache-then-TMDB loop behind enrich and enrich_seasons. Returns
+    ({key: data}, [(key, error) for keys left with nothing], how many keys
+    with no usable entry didn't fit in the budget, how many were fetched).
+    Saves the cache once, if anything was fetched.
+    """
+    entries = cache.load()
+    found, missing, stale = {}, [], []
+
+    for key in keys:
+        entry = entries.get(key)
+        if entry is None:
+            missing.append(key)
+            continue
+        data, cached_at = entry
+        found[key] = data
+        if incomplete(key, data):
+            missing.append(key)
+        elif now - cached_at >= CACHE_MAX_AGE:
+            stale.append(key)
+
+    stale.sort(key=lambda k: entries[k][1])
+    todo = (missing + stale)[: max(max_fetches, 0)]
+    deferred = len([k for k in missing[len(todo) :] if k not in found])
+
+    def attempt(key):
+        try:
+            return lookup(key), None
+        except TmdbError as exc:
+            return None, exc
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(attempt, todo))
+
+    fetched, failures = 0, []
+    for key, (data, exc) in zip(todo, results, strict=True):
+        if data is not None:
+            found[key] = data
+            entries[key] = (data, now)
+            fetched += 1
+        elif key not in found:
+            failures.append((key, exc))
+
     if fetched:
         cache.save(entries)
-
-    cache_hits = len(metadata) - fetched
-    return metadata, warnings, cache_hits
+    return found, failures, deferred, fetched
 
 
-def _cached_at(entry):
+def _cached_at(entry, version):
     """An entry trimmed by an older trim() counts as cached at the epoch, so it's refreshed before any other."""
-    if entry.get("version") != TRIM_VERSION:
+    if entry.get("version") != version:
         return datetime.min.replace(tzinfo=UTC)
     return datetime.fromisoformat(entry["cached_at"])
 
@@ -296,11 +423,6 @@ def _tv_certification(raw):
         if rating.get("iso_3166_1") == CERTIFICATION_COUNTRY and rating.get("rating"):
             return rating["rating"]
     return None
-
-
-def _parse_key(key):
-    media_type, tmdb_id = key.split("/")
-    return media_type, int(tmdb_id)
 
 
 def _tv_runtime(raw):
