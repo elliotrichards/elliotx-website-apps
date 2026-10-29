@@ -152,6 +152,44 @@ def test_overlong_public_note_is_truncated_with_a_warning():
     assert "truncated" in warnings[0]["reason"]
 
 
+# --- TV season and episode ---
+
+EPISODE_HEADER = ["watched_date", "tmdb_id", "media_type", "Season", "Episode"]
+
+
+def test_tv_rows_keep_season_and_episode():
+    rows = [
+        ["2026-01-01", 1396, "tv", 2, 5],
+        ["2026-01-01", 1396, "tv", "3", 1.0],
+        ["2026-01-01", 1396, "tv", 0, 1],  # season 0: TMDB's specials
+        ["2026-01-01", 1396, "tv", "", ""],
+    ]
+    viewings, warnings = parse_rows([EPISODE_HEADER, *rows])
+    assert warnings == []
+    assert [(v.season, v.episode) for v in viewings] == [(2, 5), (3, 1), (0, 1), (None, None)]
+
+
+def test_bad_or_half_filled_episodes_are_dropped_but_the_viewing_kept():
+    rows = [
+        ["2026-01-01", 1396, "tv", 2, ""],
+        ["2026-01-01", 1396, "tv", "", 5],
+        ["2026-01-01", 1396, "tv", 2, 0],
+        ["2026-01-01", 1396, "tv", -1, 3],
+        ["2026-01-01", 1396, "tv", 1.5, 3],
+        ["2026-01-01", 1396, "tv", "two", 3],
+        ["2026-01-01", 1396, "tv", True, 3],
+        ["2026-01-01", 603, "movie", 1, 1],
+    ]
+    viewings, warnings = parse_rows([EPISODE_HEADER, *rows])
+    assert len(viewings) == len(rows)
+    assert all((v.season, v.episode) == (None, None) for v in viewings)
+    reasons = {w["row"]: w["reason"] for w in warnings}
+    assert set(reasons) == set(range(2, 10))
+    assert "go together" in reasons[2] and "go together" in reasons[3]
+    assert all("invalid season/episode" in reasons[r] for r in range(4, 9))
+    assert "movie row" in reasons[9]
+
+
 # --- score out of 10, and the old rating column ---
 
 SCORE_HEADER = ["watched_date", "tmdb_id", "score", "rating"]
