@@ -20,7 +20,13 @@ FIRST_DATA_ROW = 2
 # never looked up, so it can't leak into the output. public_note is the one
 # note column that is published, shown on the site next to the viewing.
 REQUIRED_HEADERS = {"tmdb_id", "watched_date"}
-OPTIONAL_HEADERS = {"title", "media_type", "rating", "public_note", "format"}
+OPTIONAL_HEADERS = {"title", "media_type", "score", "rating", "public_note", "format"}
+
+# score is my rating out of 10, a whole number. rating is the old column, 0.5
+# to 5 in half stars; a row with no score falls back to it, doubled, so the
+# sheet can move across a row at a time. Once every row has a score the
+# rating column can be deleted.
+SCORE_MIN, SCORE_MAX = 1, 10
 
 # Longer than one line on the site is a sign the wrong column was filled in.
 PUBLIC_NOTE_MAX = 280
@@ -38,7 +44,8 @@ class Viewing:
     tmdb_id: int
     media_type: str
     watched_date: date
-    rating: float | None
+    # Out of 10, 1 to 10; from the score column, or the old rating doubled.
+    score: int | None
     public_note: str | None = None
     # Free text, e.g. Cinema, Home, Streaming; the site groups by it as typed.
     format: str | None = None
@@ -103,6 +110,7 @@ def parse_rows(values):
         raw_id = cell("tmdb_id")
         raw_type = cell("media_type")
         raw_date = cell("watched_date")
+        raw_score = cell("score")
         raw_rating = cell("rating")
         public_note = _text(cell("public_note"))
         if public_note and len(public_note) > PUBLIC_NOTE_MAX:
@@ -126,12 +134,20 @@ def parse_rows(values):
             warnings.append({"row": row, "reason": reason})
             continue
 
-        rating = None
-        if not _blank(raw_rating):
+        # A bad score or rating warns but the viewing itself is still valid,
+        # so it's kept: scored from the other column if that one's good,
+        # otherwise unrated.
+        score = None
+        if not _blank(raw_score):
+            score = _parse_score(raw_score)
+            if score is None:
+                warnings.append({"row": row, "reason": f"invalid score {raw_score!r}, ignored"})
+        if score is None and not _blank(raw_rating):
             rating = _parse_rating(raw_rating)
             if rating is None:
-                # The viewing itself is still valid, so keep it, just unrated.
                 warnings.append({"row": row, "reason": f"invalid rating {raw_rating!r}, ignored"})
+            else:
+                score = int(rating * 2)
 
         viewings.append(
             Viewing(
@@ -140,7 +156,7 @@ def parse_rows(values):
                 tmdb_id=tmdb_id,
                 media_type=media_type,
                 watched_date=watched,
-                rating=rating,
+                score=score,
                 public_note=public_note,
                 format=_text(cell("format")),
             )
@@ -205,7 +221,21 @@ def _parse_date(value):
     return None
 
 
+def _parse_score(value):
+    """A whole number 1 to 10; 7, 7.0 and "7" all count."""
+    if isinstance(value, bool):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if SCORE_MIN <= score <= SCORE_MAX and score.is_integer():
+        return int(score)
+    return None
+
+
 def _parse_rating(value):
+    """The old rating column: 0.5 to 5 in half steps."""
     if isinstance(value, bool):
         return None
     try:

@@ -6,16 +6,16 @@ from sheet import Viewing, parse_rows
 GENERATED_AT = datetime(2026, 2, 4, 5, 0, 3, tzinfo=UTC)
 
 
-def v(row, tmdb_id, watched, rating=None, media_type="movie", title="t", **extra):
+def v(row, tmdb_id, watched, score=None, media_type="movie", title="t", **extra):
     return Viewing(
-        row=row, title=title, tmdb_id=tmdb_id, media_type=media_type, watched_date=watched, rating=rating, **extra
+        row=row, title=title, tmdb_id=tmdb_id, media_type=media_type, watched_date=watched, score=score, **extra
     )
 
 
 def test_envelope_and_every_title_once(sheet_values, metadata):
     viewings, _ = parse_rows(sheet_values)
     out = films_export(viewings, metadata, generated_at=GENERATED_AT, warnings=[{"reason": "x"}])
-    assert out["schemaVersion"] == SCHEMA_VERSION == 2
+    assert out["schemaVersion"] == SCHEMA_VERSION == 3
     assert out["generatedAt"] == "2026-02-04T05:00:03Z"
     assert out["attribution"] == TMDB_ATTRIBUTION
     assert out["warnings"] == [{"reason": "x"}]
@@ -60,14 +60,14 @@ def test_rewatches_and_same_day_repeats_get_distinct_ids():
 
 
 def test_viewing_shape_is_camel_case_with_note_and_format():
-    [row] = export_viewings([v(2, 652, date(2026, 10, 15), rating=3.0, public_note="Fun", format="Home")])
+    [row] = export_viewings([v(2, 652, date(2026, 10, 15), score=6, public_note="Fun", format="Home")])
     assert row == {
         "id": "2026-10-15-movie-652",
         "mediaType": "movie",
         "tmdbId": 652,
         "watchedOn": "2026-10-15",
         "order": 1,
-        "rating": 3.0,
+        "score": 6,
         "rewatch": False,
         "note": "Fun",
         "format": "Home",

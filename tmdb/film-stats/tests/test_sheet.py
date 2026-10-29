@@ -13,7 +13,7 @@ def test_valid_rows_are_parsed_and_normalised(sheet_values):
 
     # Serial 46021 = 2025-12-30; a real date cell, not a string.
     assert by_row[2].watched_date == date(2025, 12, 30)
-    assert by_row[2].rating == 4.5
+    assert by_row[2].score == 9  # rating 4.5, doubled
     # Blank media_type defaults to movie; ISO string date.
     assert by_row[3].media_type == "movie"
     assert by_row[3].watched_date == date(2025, 12, 31)
@@ -50,7 +50,7 @@ def test_blank_rows_are_skipped_silently(sheet_values):
 def test_invalid_rating_keeps_the_viewing(sheet_values):
     viewings, warnings = parse_rows(sheet_values)
     pulp = next(v for v in viewings if v.row == 11)
-    assert pulp.rating is None
+    assert pulp.score is None
     assert any(w["row"] == 11 and "invalid rating" in w["reason"] for w in warnings)
 
 
@@ -69,7 +69,7 @@ def test_half_step_ratings_only():
         ["e", 5, "movie", "2026-01-01", True],
     ]
     viewings, warnings = parse_rows([HEADER, *rows])
-    assert [v.rating for v in viewings] == [0.5, 3.5, None, None, None]
+    assert [v.score for v in viewings] == [1, 7, None, None, None]
     assert len(warnings) == 3
 
 
@@ -91,9 +91,9 @@ def test_columns_are_found_by_header_in_any_order():
     ]
     viewings, warnings = parse_rows(values)
     assert warnings == []
-    assert [(v.row, v.title, v.tmdb_id, v.watched_date, v.rating) for v in viewings] == [
-        (2, "Tony", 1329016, date(2026, 10, 4), 2.5),
-        (3, "Gregory's Girl", 21764, date(2026, 10, 21), 4.0),
+    assert [(v.row, v.title, v.tmdb_id, v.watched_date, v.score) for v in viewings] == [
+        (2, "Tony", 1329016, date(2026, 10, 4), 5),
+        (3, "Gregory's Girl", 21764, date(2026, 10, 21), 8),
     ]
     assert "private" not in repr(viewings)
 
@@ -106,7 +106,7 @@ def test_headers_are_case_and_space_insensitive_and_extras_ignored():
     viewings, _ = parse_rows(values)
     assert viewings[0].tmdb_id == 652 and viewings[0].title == "Troy"
     assert viewings[0].media_type == "movie"  # no media_type column at all
-    assert viewings[0].rating is None
+    assert viewings[0].score is None
 
 
 def test_missing_required_header_fails_the_run():
@@ -150,3 +150,48 @@ def test_overlong_public_note_is_truncated_with_a_warning():
     assert len(viewings[0].public_note) == PUBLIC_NOTE_MAX
     assert viewings[0].public_note.endswith("…")
     assert "truncated" in warnings[0]["reason"]
+
+
+# --- score out of 10, and the old rating column ---
+
+SCORE_HEADER = ["watched_date", "tmdb_id", "score", "rating"]
+
+
+def test_score_is_a_whole_number_out_of_10():
+    rows = [
+        ["2026-01-01", 1, 7],
+        ["2026-01-01", 2, "10"],
+        ["2026-01-01", 3, 1.0],
+        ["2026-01-01", 4, 7.5],
+        ["2026-01-01", 5, 0],
+        ["2026-01-01", 6, 11],
+        ["2026-01-01", 7, True],
+        ["2026-01-01", 8, "eight"],
+    ]
+    viewings, warnings = parse_rows([SCORE_HEADER, *rows])
+    assert [v.score for v in viewings] == [7, 10, 1, None, None, None, None, None]
+    assert all(isinstance(v.score, int) for v in viewings if v.score is not None)
+    assert [w["row"] for w in warnings] == [5, 6, 7, 8, 9]
+    assert all("invalid score" in w["reason"] for w in warnings)
+
+
+def test_score_wins_over_rating_and_rating_fills_rows_not_moved_yet():
+    rows = [
+        ["2026-01-01", 1, 6, 4.5],  # moved across and re-scored: the score counts
+        ["2026-01-01", 2, "", 4.5],  # not moved yet: rating doubled
+        ["2026-01-01", 3, "", ""],  # unrated
+    ]
+    viewings, warnings = parse_rows([SCORE_HEADER, *rows])
+    assert [v.score for v in viewings] == [6, 9, None]
+    assert warnings == []
+
+
+def test_bad_score_falls_back_to_a_good_rating_with_a_warning():
+    viewings, warnings = parse_rows([SCORE_HEADER, ["2026-01-01", 1, 7.5, 3.5]])
+    assert viewings[0].score == 7
+    assert warnings == [{"row": 2, "reason": "invalid score 7.5, ignored"}]
+
+
+def test_score_column_alone_needs_no_rating_column():
+    viewings, warnings = parse_rows([["watched_date", "tmdb_id", "Score"], ["2026-01-01", 1, 8]])
+    assert (viewings[0].score, warnings) == (8, [])

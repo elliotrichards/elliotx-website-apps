@@ -11,7 +11,8 @@ a movie and a show can share an ID.
 from collections import Counter
 from datetime import UTC
 
-SCHEMA_VERSION = 2
+# 3: viewings carry score (1 to 10) in place of rating (0.5 to 5).
+SCHEMA_VERSION = 3
 TMDB_ATTRIBUTION = "This product uses the TMDB API but is not endorsed or certified by TMDB."
 
 
@@ -50,7 +51,7 @@ def export_viewings(viewings):
                 "tmdbId": v.tmdb_id,
                 "watchedOn": day,
                 "order": per_day[day],
-                "rating": v.rating,
+                "score": v.score,
                 "rewatch": key in seen,
                 "note": v.public_note,
                 "format": v.format,
