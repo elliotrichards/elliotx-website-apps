@@ -2,19 +2,13 @@ import json
 import os
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from zoneinfo import ZoneInfo
 
 from google.cloud import storage
 
 import films
 import publish
 import sheet
-import stats
 import tmdb
-
-# Past this, stats.json is getting too big for the dashboard to load cheaply.
-# (The full log is already split out into viewings.json.)
-SIZE_WARNING_BYTES = 300_000
 
 
 def run():
@@ -24,11 +18,7 @@ def run():
     sheet_tab = os.environ.get("SHEET_TAB", "Watch Log")
     cache_bucket = os.environ["CACHE_BUCKET"]
     stats_bucket = os.environ["STATS_BUCKET"]
-    stats_object = os.environ.get("STATS_OBJECT", "stats.json")
-    viewings_object = os.environ.get("VIEWINGS_OBJECT", "viewings.json")
     films_object = os.environ.get("FILMS_OBJECT", "films.json")
-    # "Today" for streaks and month filling is the watcher's local date, not UTC.
-    time_zone = ZoneInfo(os.environ.get("TIME_ZONE", "Europe/London"))
 
     values = sheet.fetch_rows(sheet_id, sheet_tab)
     viewings, row_warnings = sheet.parse_rows(values)
@@ -38,38 +28,22 @@ def run():
     keys = sorted({(v.media_type, v.tmdb_id) for v in viewings})
     metadata, tmdb_warnings, cache_hits = tmdb.enrich(keys, client, tmdb.GcsCache(gcs.bucket(cache_bucket)))
 
-    now = datetime.now(UTC)
-    payload = stats.compute_stats(
-        viewings,
-        metadata,
-        today=now.astimezone(time_zone).date(),
-        generated_at=now,
-        warnings=row_warnings + tmdb_warnings,
-    )
-    log = stats.viewings_log(viewings, metadata, generated_at=now)
-    export = films.films_export(viewings, metadata, generated_at=now, warnings=payload["warnings"])
-    # stats.json last: the site's pull checks the others against its count,
-    # so once it changes, the matching log and films.json are already in place.
-    films_size = publish.publish(gcs.bucket(stats_bucket), export, films_object)
-    log_size = publish.publish(gcs.bucket(stats_bucket), log, viewings_object)
-    size = publish.publish(gcs.bucket(stats_bucket), payload, stats_object)
+    warnings = row_warnings + tmdb_warnings
+    export = films.films_export(viewings, metadata, generated_at=datetime.now(UTC), warnings=warnings)
+    size = publish.publish(gcs.bucket(stats_bucket), export, films_object)
 
     summary = {
         "rows_read": max(len(values) - 1, 0),  # excluding the header row
         "viewings": len(viewings),
         # A bad rating warns but keeps its row, so not every warned row was skipped.
         "rows_skipped": len({w["row"] for w in row_warnings} - {v.row for v in viewings}),
-        "warnings": len(payload["warnings"]),
+        "warnings": len(warnings),
         "titles": len(keys),
         "tmdb_calls": client.calls,
         "cache_hits": cache_hits,
         "bytes": size,
-        "log_bytes": log_size,
-        "films_bytes": films_size,
     }
     print(f"film-stats run: {json.dumps(summary)}")
-    if size > SIZE_WARNING_BYTES:
-        print(f"film-stats: {stats_object} is {size} bytes, consider splitting it")
     return summary
 
 

@@ -34,8 +34,8 @@ def test_publish_stages_then_replaces_live_object():
     bucket = FakeBucket()
     size = publish(bucket, {"title": "Amélie"})
 
-    assert list(bucket.objects) == ["stats.json"]  # staging copy cleaned up
-    live = bucket.objects["stats.json"]
+    assert list(bucket.objects) == ["films.json"]  # staging copy cleaned up
+    live = bucket.objects["films.json"]
     assert live["content_type"] == "application/json"
     assert live["cache_control"] == CACHE_CONTROL
     assert json.loads(live["body"]) == {"title": "Amélie"}

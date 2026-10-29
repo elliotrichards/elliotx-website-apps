@@ -82,7 +82,7 @@ def parse_rows(values):
     Validates raw rows (header row first) into Viewings. A bad row is skipped
     and recorded in warnings (sheet row number + reason) instead of failing
     the run. A bad header row raises SheetError instead: every row would be
-    misread, so publishing an empty stats.json would be worse than failing.
+    misread, so publishing an empty films.json would be worse than failing.
     """
     if not values:
         raise SheetError("sheet is empty: expected a header row")

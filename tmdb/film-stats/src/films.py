@@ -1,19 +1,18 @@
 """
 Pure function: validated viewings + trimmed TMDB metadata -> films.json, the
-site's v2 data file. Unlike stats.json it does no aggregating: it's every
-viewing plus one metadata entry per title, and the site works out its own
-stats at build time, so new charts don't need a change here.
+site's data file. It does no aggregating: it's every viewing plus one
+metadata entry per title, and the site works out its own stats at build
+time, so new charts don't need a change here.
 
-Keys are camelCase (the site's convention) where stats.json's are snake_case.
-Films are keyed "movie/603" / "tv/1396", the same as the TMDB cache, because
+Keys are camelCase (the site's convention). Films are keyed "movie/603" / "tv/1396", the same as the TMDB cache, because
 a movie and a show can share an ID.
 """
 
 from collections import Counter
-
-from stats import TMDB_ATTRIBUTION, _utc_iso
+from datetime import UTC
 
 SCHEMA_VERSION = 2
+TMDB_ATTRIBUTION = "This product uses the TMDB API but is not endorsed or certified by TMDB."
 
 
 def films_export(viewings, metadata, *, generated_at, warnings=()):
@@ -110,3 +109,7 @@ def _titles(viewings):
         key = (v.media_type, v.tmdb_id)
         titles[key] = v.title or titles.get(key) or None
     return dict(sorted(titles.items()))
+
+
+def _utc_iso(dt):
+    return dt.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
