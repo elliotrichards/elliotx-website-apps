@@ -12,7 +12,9 @@ from collections import Counter
 from datetime import UTC
 
 # 3: viewings carry score (1 to 10) in place of rating (0.5 to 5).
-SCHEMA_VERSION = 3
+# 4: viewings carry season and episode (TV, or null), and a TV rewatch is the
+#    same episode again rather than any earlier episode of the show.
+SCHEMA_VERSION = 4
 TMDB_ATTRIBUTION = "This product uses the TMDB API but is not endorsed or certified by TMDB."
 
 
@@ -34,12 +36,17 @@ def export_viewings(viewings):
     """
     Oldest first, by watch date and then sheet row: backfilled rows can be
     anywhere in the sheet, so sheet order alone says nothing. `order` is the
-    position within the day; `rewatch` means an earlier viewing exists.
+    position within the day; `rewatch` means an earlier viewing of the same
+    film, or for TV the same episode, exists. A TV row that doesn't say which
+    episode can't be matched, so it's never a rewatch.
     """
     seen, per_day, ids = set(), Counter(), Counter()
     out = []
     for v in sorted(viewings, key=lambda v: (v.watched_date, v.row)):
-        key = (v.media_type, v.tmdb_id)
+        if v.media_type != "tv":
+            key = (v.media_type, v.tmdb_id)
+        else:
+            key = None if v.episode is None else (v.media_type, v.tmdb_id, v.season, v.episode)
         day = v.watched_date.isoformat()
         per_day[day] += 1
         base = f"{day}-{v.media_type}-{v.tmdb_id}"
@@ -51,13 +58,16 @@ def export_viewings(viewings):
                 "tmdbId": v.tmdb_id,
                 "watchedOn": day,
                 "order": per_day[day],
+                "season": v.season,
+                "episode": v.episode,
                 "score": v.score,
-                "rewatch": key in seen,
+                "rewatch": key is not None and key in seen,
                 "note": v.public_note,
                 "format": v.format,
             }
         )
-        seen.add(key)
+        if key is not None:
+            seen.add(key)
     return out
 
 

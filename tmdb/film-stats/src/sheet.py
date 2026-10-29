@@ -20,13 +20,17 @@ FIRST_DATA_ROW = 2
 # never looked up, so it can't leak into the output. public_note is the one
 # note column that is published, shown on the site next to the viewing.
 REQUIRED_HEADERS = {"tmdb_id", "watched_date"}
-OPTIONAL_HEADERS = {"title", "media_type", "score", "rating", "public_note", "format"}
+OPTIONAL_HEADERS = {"title", "media_type", "score", "rating", "public_note", "format", "season", "episode"}
 
 # score is my rating out of 10, a whole number. rating is the old column, 0.5
 # to 5 in half stars; a row with no score falls back to it, doubled, so the
 # sheet can move across a row at a time. Once every row has a score the
 # rating column can be deleted.
 SCORE_MIN, SCORE_MAX = 1, 10
+
+# A TV row can say which episode it was: both columns or neither. Season 0
+# is TMDB's specials; episodes count from 1.
+SEASON_MIN, EPISODE_MIN = 0, 1
 
 # Longer than one line on the site is a sign the wrong column was filled in.
 PUBLIC_NOTE_MAX = 280
@@ -49,6 +53,9 @@ class Viewing:
     public_note: str | None = None
     # Free text, e.g. Cinema, Home, Streaming; the site groups by it as typed.
     format: str | None = None
+    # TV only, and both or neither: which episode this was.
+    season: int | None = None
+    episode: int | None = None
 
 
 class SheetError(Exception):
@@ -149,6 +156,8 @@ def parse_rows(values):
             else:
                 score = int(rating * 2)
 
+        season, episode = _episode(cell("season"), cell("episode"), media_type, row, warnings)
+
         viewings.append(
             Viewing(
                 row=row,
@@ -159,6 +168,8 @@ def parse_rows(values):
                 score=score,
                 public_note=public_note,
                 format=_text(cell("format")),
+                season=season,
+                episode=episode,
             )
         )
 
@@ -218,6 +229,40 @@ def _parse_date(value):
             return date.fromisoformat(value.strip())
         except ValueError:
             return None
+    return None
+
+
+def _episode(raw_season, raw_episode, media_type, row, warnings):
+    """
+    (season, episode) for a TV row, or (None, None). Like a bad score, a bad
+    or half-filled pair warns and is dropped, but the viewing is kept.
+    """
+    if _blank(raw_season) and _blank(raw_episode):
+        return None, None
+    if media_type != "tv":
+        warnings.append({"row": row, "reason": "season/episode on a movie row, ignored"})
+        return None, None
+    if _blank(raw_season) or _blank(raw_episode):
+        warnings.append({"row": row, "reason": "season and episode go together, ignored"})
+        return None, None
+    season = _parse_whole(raw_season, SEASON_MIN)
+    episode = _parse_whole(raw_episode, EPISODE_MIN)
+    if season is None or episode is None:
+        warnings.append({"row": row, "reason": f"invalid season/episode {raw_season!r}/{raw_episode!r}, ignored"})
+        return None, None
+    return season, episode
+
+
+def _parse_whole(value, minimum):
+    """A whole number from minimum up; 2, 2.0 and "2" all count."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number >= minimum and number.is_integer():
+        return int(number)
     return None
 
 

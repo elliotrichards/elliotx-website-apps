@@ -15,7 +15,7 @@ def v(row, tmdb_id, watched, score=None, media_type="movie", title="t", **extra)
 def test_envelope_and_every_title_once(sheet_values, metadata):
     viewings, _ = parse_rows(sheet_values)
     out = films_export(viewings, metadata, generated_at=GENERATED_AT, warnings=[{"reason": "x"}])
-    assert out["schemaVersion"] == SCHEMA_VERSION == 3
+    assert out["schemaVersion"] == SCHEMA_VERSION == 4
     assert out["generatedAt"] == "2026-02-04T05:00:03Z"
     assert out["attribution"] == TMDB_ATTRIBUTION
     assert out["warnings"] == [{"reason": "x"}]
@@ -59,6 +59,24 @@ def test_rewatches_and_same_day_repeats_get_distinct_ids():
     ]
 
 
+def test_a_tv_rewatch_is_the_same_episode_again():
+    def ep(row, watched, season=None, episode=None):
+        return v(row, 1396, watched, media_type="tv", season=season, episode=episode)
+
+    rows = [
+        ep(2, date(2026, 1, 1), 1, 1),
+        ep(3, date(2026, 1, 2), 1, 2),
+        ep(4, date(2026, 1, 3), 1, 1),
+        ep(5, date(2026, 1, 4)),
+        ep(6, date(2026, 1, 5)),
+        ep(7, date(2026, 1, 6), 2, 1),
+    ]
+    out = export_viewings(rows)
+    # Only S1 E1 again; rows that don't say which episode never match.
+    assert [r["rewatch"] for r in out] == [False, False, True, False, False, False]
+    assert [(r["season"], r["episode"]) for r in out][:3] == [(1, 1), (1, 2), (1, 1)]
+
+
 def test_viewing_shape_is_camel_case_with_note_and_format():
     [row] = export_viewings([v(2, 652, date(2026, 10, 15), score=6, public_note="Fun", format="Home")])
     assert row == {
@@ -67,6 +85,8 @@ def test_viewing_shape_is_camel_case_with_note_and_format():
         "tmdbId": 652,
         "watchedOn": "2026-10-15",
         "order": 1,
+        "season": None,
+        "episode": None,
         "score": 6,
         "rewatch": False,
         "note": "Fun",
