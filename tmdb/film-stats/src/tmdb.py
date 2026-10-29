@@ -101,7 +101,7 @@ class TmdbClient:
 
 def trim(media_type, raw):
     """
-    Keeps only the fields the stats and the site's film pages need, in one
+    Keeps only the fields the site's movies pages need, in one
     shape for both movies and TV. People are {id, name} so the site can tell
     two people with the same name apart.
     """

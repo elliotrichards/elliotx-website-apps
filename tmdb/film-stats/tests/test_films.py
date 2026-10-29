@@ -1,8 +1,7 @@
 from datetime import UTC, date, datetime
 
-from films import SCHEMA_VERSION, export_film, export_viewings, films_export
+from films import SCHEMA_VERSION, TMDB_ATTRIBUTION, export_film, export_viewings, films_export
 from sheet import Viewing, parse_rows
-from stats import TMDB_ATTRIBUTION
 
 GENERATED_AT = datetime(2026, 2, 4, 5, 0, 3, tzinfo=UTC)
 

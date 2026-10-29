@@ -1,4 +1,4 @@
-"""Writes stats.json to the public bucket."""
+"""Writes films.json to the public bucket."""
 
 import json
 
@@ -6,7 +6,7 @@ CACHE_CONTROL = "public, max-age=3600"
 STAGING_PREFIX = "_staging/"
 
 
-def publish(bucket, payload, object_name="stats.json"):
+def publish(bucket, payload, object_name="films.json"):
     """
     Uploads under a staging name, then server-side copies over the live
     object. A single GCS upload is already all-or-nothing, so readers never
