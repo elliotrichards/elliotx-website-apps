@@ -159,8 +159,8 @@ A daily batch job: reads a hand-edited film watch log from a Google Sheet, enric
 Cloud Scheduler (05:00 Europe/London)
   --POST, OIDC token-->  Cloud Run service (film-stats, private)
                             --Sheets API, ADC, read-only scope-->  Google Sheet ("Watch Log" tab)
-                            --GET /{movie|tv}/{id}-->  TMDB API (token via secret_key_ref)
-                            --tmdb/index.json-->  GCS elliotx-film-tmdb-cache (private)
+                            --GET /{movie|tv}/{id}, /tv/{id}/season/{n}-->  TMDB API (token via secret_key_ref)
+                            --tmdb/index.json, tmdb/seasons.json-->  GCS elliotx-film-tmdb-cache (private)
                             --films.json-->  GCS elliotx-film-stats-public (allUsers read, CORS: elliotx.com)
 ```
 
@@ -170,7 +170,8 @@ Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Ru
 
 - `src/sheet.py`: reads the sheet and validates rows. Dates are requested as serial numbers, not formatted strings, so the sheet's locale can't make `03/04` ambiguous. Text cells in ISO `YYYY-MM-DD` still parse.
 - `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of *trimmed* responses in one index object (`tmdb/index.json`), read once and written once per run. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are used as-is and refreshed when there's room, and the old copy is kept if TMDB is down.
-- **Lookup budget**: at most 600 TMDB lookups per run (`MAX_FETCHES_PER_RUN`), four at a time, which is about 40s against the service's 120s timeout. Titles with no cache entry come first, then the stalest. Anything over the cap still counts in the totals, gets one combined "N titles are waiting for a TMDB lookup" warning, and is filled in by later runs. So a big backfill catches up over a few days on its own; trigger the Scheduler job by hand to speed it up.
+- **Episode titles**: for TV rows with `season` and `episode`, one `/tv/{id}/season/{n}` lookup per show and season watched, trimmed to each episode's name, air date and runtime (no overview, which would spoil the log) and cached the same way in a separate object, `tmdb/seasons.json` (older builds read every key in `tmdb/index.json` as `type/id`). A cached season missing an episode that's been logged is refetched straight away, for shows that were still airing when it was cached. A season or episode TMDB doesn't have is a warning; the viewing is kept without a title.
+- **Lookup budget**: at most 600 TMDB lookups per run (`MAX_FETCHES_PER_RUN`), four at a time, which is about 40s against the service's 120s timeout. Titles with no cache entry come first, then the stalest; seasons get whatever's left after titles. Anything over the cap still counts in the totals, gets one combined "N titles are waiting for a TMDB lookup" warning, and is filled in by later runs. So a big backfill catches up over a few days on its own; trigger the Scheduler job by hand to speed it up.
 - **Trim version**: each cache entry records the `TRIM_VERSION` that trimmed it. Bumping it (whenever `trim()` keeps new fields) makes every older entry count as the stalest of all, so they're refreshed first, within the usual lookup budget, and still used until then.
 - `src/films.py`: pure functions with no I/O and no clock reads, so they're fully unit-tested.
 - `src/publish.py`: uploads under `_staging/`, then server-side copies over the live object with `Cache-Control: public, max-age=3600`.
@@ -202,7 +203,7 @@ Blank rows are ignored. A row with a missing or non-numeric `tmdb_id`, an unknow
 The data behind the site's `/data/movies` pages. It does no aggregating: the site computes its own stats at build time, so new charts don't need a change here. Keys are camelCase.
 
 - `viewings`: every viewing, oldest first by watch date then sheet row (backfilled rows can sit anywhere in the sheet). Each one has `id` (`2026-10-25-movie-1288445`, with `-2` for a same-day repeat), `mediaType`, `tmdbId`, `watchedOn`, `order` (position within the day), `season` and `episode` (TV, or null; new in schema 4), `score` (1–10, or null if unrated; schema 2 had `rating`, 0.5–5, here instead), `rewatch` (an earlier viewing of the same film, or for TV of the same episode; a TV row without `season` and `episode` is never a rewatch), `note` (from `public_note`) and `format`.
-- `films`: one entry per title, keyed `movie/603` or `tv/1396` because a movie and a show can share an ID. Title, original title, release date, runtime (per episode for TV), genres, directors and creators (`{id, name}`), top 8 cast, language, countries, tagline, overview, poster and backdrop paths, TMDB vote average and count, collection, GB certification, IMDb ID, and seasons/episodes for TV. A title TMDB couldn't resolve is still listed, with the sheet's title and everything else null.
+- `films`: one entry per title, keyed `movie/603` or `tv/1396` because a movie and a show can share an ID. Title, original title, release date, runtime (per episode for TV), genres, directors and creators (`{id, name}`), top 8 cast, language, countries, tagline, overview, poster and backdrop paths, TMDB vote average and count, collection, GB certification, IMDb ID, and seasons/episodes for TV. A show also has `watchedEpisodes`: TMDB's `name`, `airDate` and `runtime` for each episode in the log, keyed `"2/5"` (season/episode), watched ones only. It was added to schema 4 as an optional extra, without a version bump. A title TMDB couldn't resolve is still listed, with the sheet's title and everything else null.
 - `warnings`, `attribution`, `generatedAt`.
 
 It's public, so `public_note` is the only note column it reads.

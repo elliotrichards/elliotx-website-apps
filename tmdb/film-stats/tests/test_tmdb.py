@@ -63,6 +63,15 @@ class FakeClient:
             raise tmdb.TmdbNotFound(f"TMDB has no {media_type} with id {tmdb_id}")
         return answer
 
+    def fetch_season(self, tmdb_id, season):
+        self.fetched.append((tmdb_id, season))
+        answer = self.answers.get((tmdb_id, season), self.default)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is None:
+            raise tmdb.TmdbNotFound(f"TMDB has no season {season} of tv/{tmdb_id}")
+        return answer
+
 
 MOVIE = {
     "title": "The Matrix",
@@ -296,3 +305,91 @@ def test_gcs_cache_treats_a_corrupt_index_as_empty():
     bucket = FakeBucket()
     bucket.store[tmdb.GcsCache.INDEX_PATH] = "{not json"
     assert tmdb.GcsCache(bucket).load() == {}
+
+
+# --- TV seasons, for episode titles ---
+
+SEASON = {
+    "season_number": 1,
+    "episodes": [
+        {"episode_number": 1, "name": "Pilot", "air_date": "2008-01-20", "runtime": 58, "overview": "spoiler"},
+        {"episode_number": 2, "name": "Cat's in the Bag...", "air_date": "2008-01-27", "runtime": 48},
+        {"episode_number": 3, "name": "", "air_date": "", "runtime": None, "still_path": "/s.jpg"},
+    ],
+}
+
+
+def test_trim_season_keeps_name_air_date_and_runtime_only():
+    t = tmdb.trim_season(SEASON)
+    assert t["1"] == {"name": "Pilot", "air_date": "2008-01-20", "runtime": 58}
+    assert t["3"] == {"name": None, "air_date": None, "runtime": None}
+    assert "spoiler" not in repr(t) and "/s.jpg" not in repr(t)
+
+
+def test_fetch_season_url_and_not_found():
+    c, session = client([FakeResponse(200, SEASON), FakeResponse(404)])
+    assert c.fetch_season(1396, 1) == SEASON
+    assert session.urls[0].endswith("/tv/1396/season/1")
+    try:
+        c.fetch_season(1396, 9)
+    except tmdb.TmdbNotFound as exc:
+        assert str(exc) == "TMDB has no season 9 of tv/1396"
+    else:
+        raise AssertionError("expected TmdbNotFound")
+
+
+def test_enrich_seasons_fetches_each_season_once_and_caches_it():
+    cache = MemoryCache()
+    client = FakeClient(default=SEASON)
+    seasons, warnings = tmdb.enrich_seasons({(1396, 1): {1, 2}, (1396, 2): {1}}, client, cache, now=NOW)
+    assert sorted(client.fetched) == [(1396, 1), (1396, 2)]
+    assert seasons[(1396, 1)]["2"]["name"] == "Cat's in the Bag..."
+    assert (warnings, cache.saves) == ([], 1)
+
+    # Next run: all fresh, no TMDB calls.
+    client = FakeClient()
+    seasons, warnings = tmdb.enrich_seasons({(1396, 1): {1, 2}}, client, cache, now=NOW + timedelta(days=1))
+    assert (client.fetched, warnings) == ([], [])
+
+
+def test_enrich_seasons_refetches_a_fresh_season_missing_a_watched_episode():
+    # Cached while the show was airing: only episode 1 existed then.
+    cache = MemoryCache({(1396, 1): ({"1": {"name": "Pilot", "air_date": None, "runtime": 58}}, NOW)})
+    client = FakeClient(default=SEASON)
+    seasons, warnings = tmdb.enrich_seasons({(1396, 1): {1, 2}}, client, cache, now=NOW)
+    assert client.fetched == [(1396, 1)]
+    assert "2" in seasons[(1396, 1)] and warnings == []
+
+
+def test_enrich_seasons_warns_for_unknown_seasons_and_episodes():
+    client = FakeClient(answers={(1396, 1): SEASON})
+    seasons, warnings = tmdb.enrich_seasons({(1396, 1): {1, 99}, (1396, 9): {1}}, client, MemoryCache(), now=NOW)
+    assert (1396, 9) not in seasons
+    assert warnings == [
+        {"tmdb_id": 1396, "media_type": "tv", "season": 9, "reason": "TMDB has no season 9 of tv/1396"},
+        {"tmdb_id": 1396, "media_type": "tv", "season": 1, "reason": "TMDB has no episode 99 in season 1 of tv/1396"},
+    ]
+
+
+def test_enrich_seasons_defers_past_the_budget_and_never_goes_negative():
+    wanted = {(1396, n): {1} for n in range(1, 6)}
+    client = FakeClient(default=SEASON)
+    seasons, warnings = tmdb.enrich_seasons(wanted, client, MemoryCache(), now=NOW, max_fetches=2)
+    assert len(client.fetched) == 2
+    assert warnings[-1]["reason"].startswith("3 TV seasons are waiting")
+
+    # Titles can use the whole budget, leaving a negative remainder.
+    client = FakeClient(default=SEASON)
+    _, warnings = tmdb.enrich_seasons(wanted, client, MemoryCache(), now=NOW, max_fetches=-5)
+    assert client.fetched == [] and warnings[-1]["reason"].startswith("5 TV seasons are waiting")
+
+
+def test_season_cache_has_its_own_index_object():
+    bucket = FakeBucket()
+    tmdb.GcsCache(bucket).save({("tv", 1396): ({"title": "y"}, NOW)})
+    seasons = tmdb.SeasonCache(bucket)
+    assert seasons.load() == {}
+    seasons.save({(1396, 2): ({"5": {"name": "x"}}, NOW)})
+    assert sorted(bucket.store) == [tmdb.GcsCache.INDEX_PATH, tmdb.SeasonCache.INDEX_PATH]
+    assert seasons.load() == {(1396, 2): ({"5": {"name": "x"}}, NOW)}
+    assert tmdb.GcsCache(bucket).load() == {("tv", 1396): ({"title": "y"}, NOW)}

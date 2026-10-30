@@ -115,3 +115,32 @@ def test_film_maps_new_fields_to_camel_case():
     assert film["cast"] == [{"id": 1, "name": "Brad Pitt", "character": "Achilles", "profilePath": "/b.jpg"}]
     assert film["directors"] == [{"id": 2, "name": "Wolfgang Petersen"}]
     assert (film["tmdbVoteCount"], film["backdropPath"], film["mediaType"]) == (9000, "/bd.jpg", "movie")
+
+
+def test_shows_list_only_their_watched_episodes_that_tmdb_knows():
+    rows = [
+        v(2, 1396, date(2026, 1, 1), media_type="tv", season=1, episode=2),
+        v(3, 1396, date(2026, 1, 2), media_type="tv", season=1, episode=1),
+        v(4, 1396, date(2026, 1, 3), media_type="tv", season=2, episode=10),
+        v(5, 1396, date(2026, 1, 4), media_type="tv", season=1, episode=1),  # rewatch: listed once
+        v(6, 1396, date(2026, 1, 5), media_type="tv"),  # no episode
+        v(7, 1396, date(2026, 1, 6), media_type="tv", season=3, episode=1),  # season TMDB didn't return
+        v(8, 603, date(2026, 1, 7)),
+    ]
+    seasons = {
+        (1396, 1): {str(n): {"name": f"E{n}", "air_date": "2008-01-20", "runtime": 50} for n in (1, 2, 3)},
+        (1396, 2): {"10": {"name": "Gray Matter", "air_date": None, "runtime": None}},
+    }
+    films = films_export(rows, {}, generated_at=GENERATED_AT, seasons=seasons)["films"]
+    assert films["tv/1396"]["watchedEpisodes"] == {
+        "1/1": {"name": "E1", "airDate": "2008-01-20", "runtime": 50},
+        "1/2": {"name": "E2", "airDate": "2008-01-20", "runtime": 50},
+        "2/10": {"name": "Gray Matter", "airDate": None, "runtime": None},
+    }
+    assert list(films["tv/1396"]["watchedEpisodes"]) == ["1/1", "1/2", "2/10"]  # numeric order
+    assert "watchedEpisodes" not in films["movie/603"]
+
+
+def test_a_show_with_no_season_data_still_gets_an_empty_episode_list():
+    rows = [v(2, 1396, date(2026, 1, 1), media_type="tv", season=1, episode=1)]
+    assert films_export(rows, {}, generated_at=GENERATED_AT)["films"]["tv/1396"]["watchedEpisodes"] == {}
