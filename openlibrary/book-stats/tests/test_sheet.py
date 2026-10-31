@@ -30,6 +30,42 @@ def test_reads_a_full_row_by_header_name():
     ]
 
 
+def test_category_defaults_to_read_and_extras_are_empty():
+    reads, warnings = parse(["2026-10-12", "Book"])
+    assert warnings == []
+    assert (reads[0].category, reads[0].tags, reads[0].series) == ("read", (), None)
+
+
+def test_reads_category_tags_and_series():
+    header = [*HEADER, "category", "tags", "series"]
+    row = ["2026-02-21", "Why Mummy Swears", *[""] * 6, "Read", " Fiction, humour ,FICTION,,", "Why Mummy #2"]
+    reads, warnings = parse(row, header=header)
+    assert warnings == []
+    assert reads[0].category == "read"
+    assert reads[0].tags == ("fiction", "humour")  # trimmed, lower-cased, de-duplicated, in order typed
+    assert reads[0].series == "Why Mummy #2"
+
+
+@pytest.mark.parametrize("category", ["reading-list", "currently-reading", "Reading List"])
+def test_unfinished_books_need_no_date(category):
+    reads, warnings = parse(["", "Artemis", "Andy Weir", "", "", "", "", "", category], header=[*HEADER, "category"])
+    assert warnings == []
+    assert reads[0].finished_date is None
+    assert reads[0].category in ("reading-list", "currently-reading")
+
+
+def test_a_wrong_date_on_an_unfinished_book_still_warns():
+    reads, warnings = parse(["12/10/2026", "A", "", "", "", "", "", "", "reading-list"], header=[*HEADER, "category"])
+    assert reads == []
+    assert warnings == [{"row": 2, "reason": "unparseable finished_date '12/10/2026'"}]
+
+
+def test_unknown_category_skips_the_row_with_a_warning():
+    reads, warnings = parse(["2026-01-01", "A", "", "", "", "", "", "", "finished"], header=[*HEADER, "category"])
+    assert reads == []
+    assert warnings == [{"row": 2, "reason": "unknown category 'finished', row skipped"}]
+
+
 def test_never_reads_notes():
     reads, _ = parse(["2026-10-12", "Book", "", "", "", "", "", "secret"])
     assert "secret" not in repr(reads)

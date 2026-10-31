@@ -20,13 +20,19 @@ FIRST_DATA_ROW = 2
 # never looked up, so it can't leak into the output. public_note is the one
 # note column that is published, shown on the site next to the book.
 REQUIRED_HEADERS = {"title", "finished_date"}
-OPTIONAL_HEADERS = {"author", "score", "isbn", "format", "public_note"}
+OPTIONAL_HEADERS = {"author", "score", "isbn", "format", "public_note", "category", "tags", "series"}
 
 # My score out of 10, a whole number. Unlike the film log, 0 is allowed.
 SCORE_MIN, SCORE_MAX = 0, 10
 
 # Longer than one line on the site is a sign the wrong column was filled in.
 PUBLIC_NOTE_MAX = 280
+
+# Where a book is: finished, being read, waiting on the list, or given up on.
+# A blank category means "read", so a sheet without the column behaves as it
+# did before categories existed. Only a "read" row needs a finished_date.
+CATEGORIES = ("read", "currently-reading", "reading-list", "did-not-finish")
+DEFAULT_CATEGORY = "read"
 
 # Sheets' date serial epoch: serial 1 is 1899-12-31, so day 0 is the 30th.
 SERIAL_EPOCH = date(1899, 12, 30)
@@ -39,7 +45,8 @@ class Read:
     row: int
     title: str
     author: str | None
-    finished_date: date
+    # None for a book that is not finished: reading-list or currently-reading.
+    finished_date: date | None
     # Out of 10, 0 to 10, or None if unscored.
     score: int | None
     # Digits only (and a final X for ISBN-10), or None.
@@ -47,6 +54,11 @@ class Read:
     # Free text, e.g. paperback, ebook, audiobook; the site groups by it lower-cased.
     format: str | None = None
     public_note: str | None = None
+    # One of CATEGORIES.
+    category: str = DEFAULT_CATEGORY
+    # Genre tags, lower-cased and de-duplicated, in the order typed.
+    tags: tuple[str, ...] = ()
+    series: str | None = None
 
 
 class SheetError(Exception):
@@ -107,9 +119,17 @@ def parse_rows(values):
         if title is None:
             continue
 
+        raw_category = cell("category")
+        category = DEFAULT_CATEGORY if _blank(raw_category) else str(raw_category).strip().lower().replace(" ", "-")
+        if category not in CATEGORIES:
+            warnings.append({"row": row, "reason": f"unknown category {raw_category!r}, row skipped"})
+            continue
+
         raw_date = cell("finished_date")
         finished = _parse_date(raw_date)
-        if finished is None:
+        # Only a finished read needs a date; a book still to read has none,
+        # but a date that is there and wrong is still worth a warning.
+        if finished is None and (category == "read" or not _blank(raw_date)):
             reason = "missing finished_date" if _blank(raw_date) else f"unparseable finished_date {raw_date!r}"
             warnings.append({"row": row, "reason": reason})
             continue
@@ -145,6 +165,9 @@ def parse_rows(values):
                 isbn=isbn,
                 format=_text(cell("format")),
                 public_note=public_note,
+                category=category,
+                tags=_parse_tags(cell("tags")),
+                series=_text(cell("series")),
             )
         )
 
@@ -176,6 +199,18 @@ def _blank(value):
 def _text(value):
     """A trimmed string, or None for a blank cell."""
     return None if _blank(value) else " ".join(str(value).split())
+
+
+def _parse_tags(value):
+    """Comma-separated genre tags -> lower-cased, de-duplicated, in the order typed."""
+    if _blank(value):
+        return ()
+    seen = {}
+    for part in str(value).split(","):
+        tag = " ".join(part.split()).lower()
+        if tag:
+            seen.setdefault(tag)
+    return tuple(seen)
 
 
 def _parse_date(value):

@@ -7,9 +7,8 @@ GENERATED = datetime(2026, 10, 31, 5, 0, 7, tzinfo=UTC)
 
 
 def read(row, title, day, isbn=None, score=None, author="Author", **extra):
-    return Read(
-        row=row, title=title, author=author, finished_date=date.fromisoformat(day), score=score, isbn=isbn, **extra
-    )
+    finished = date.fromisoformat(day) if day else None
+    return Read(row=row, title=title, author=author, finished_date=finished, score=score, isbn=isbn, **extra)
 
 
 def test_export_shape_and_order():
@@ -38,12 +37,15 @@ def test_export_shape_and_order():
         "book": "isbn/9780099598244",
         "title": "First",
         "author": "Author",
+        "category": "read",
         "finishedOn": "2026-10-01",
         "order": 1,
         "score": 0,
         "format": None,
         "note": "Fun",
         "isbn": "9780099598244",
+        "series": None,
+        "tags": [],
         "reread": False,
     }
     assert out["books"]["isbn/9780099598244"] == {
@@ -95,4 +97,49 @@ def test_same_day_ids_and_order():
         ("2026-01-01-a", 1),
         ("2026-01-01-a-2", 2),
         ("2026-01-01-b", 3),
+    ]
+
+
+def test_category_tags_and_series_are_exported():
+    out = books_export(
+        [read(2, "Why Mummy Swears", "2026-02-21", category="read", tags=("fiction", "humour"), series="Why Mummy #2")],
+        {},
+        generated_at=GENERATED,
+    )
+    assert out["schemaVersion"] == 2
+    assert out["reads"][0]["category"] == "read"
+    assert out["reads"][0]["tags"] == ["fiction", "humour"]
+    assert out["reads"][0]["series"] == "Why Mummy #2"
+
+
+def test_unfinished_books_have_no_date_or_order_and_come_last():
+    out = books_export(
+        [
+            read(2, "Artemis", None, category="reading-list"),
+            read(3, "Deep Work", None, category="currently-reading"),
+            read(4, "Finished", "2026-01-01"),
+        ],
+        {},
+        generated_at=GENERATED,
+    )
+    assert [r["title"] for r in out["reads"]] == ["Finished", "Artemis", "Deep Work"]
+    unfinished = out["reads"][1:]
+    assert [(r["finishedOn"], r["order"], r["reread"]) for r in unfinished] == [(None, None, False)] * 2
+    assert [r["id"] for r in unfinished] == ["reading-list-artemis", "currently-reading-deep-work"]
+
+
+def test_only_a_finished_read_makes_a_later_read_a_reread():
+    out = books_export(
+        [
+            read(2, "Dune", "2020-01-01", category="did-not-finish"),
+            read(3, "Dune", "2021-01-01"),
+            read(4, "Dune", "2022-01-01"),
+        ],
+        {},
+        generated_at=GENERATED,
+    )
+    assert [(r["category"], r["reread"]) for r in out["reads"]] == [
+        ("did-not-finish", False),
+        ("read", False),
+        ("read", True),
     ]
