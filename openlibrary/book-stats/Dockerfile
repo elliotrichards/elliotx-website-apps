@@ -5,7 +5,7 @@
 # built for one won't load in the other. dependabot.yml only allows digest/
 # patch bumps of the builder for that reason; bump both FROM lines together
 # by hand when distroless moves to a new interpreter.
-FROM python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c AS builder
+FROM python:3.13-slim@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb AS builder
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
