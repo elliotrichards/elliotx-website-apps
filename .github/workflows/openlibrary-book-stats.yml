@@ -1,0 +1,68 @@
+name: openlibrary-book-stats
+
+# Python app, so not lint-app.yml (Node-specific): the PR job runs ruff and
+# pytest inline instead, then builds the image and imports main.py inside
+# it — same builder/runtime python mismatch guard as last-fm-recent-tracks.
+on:
+  pull_request:
+    paths:
+      - "openlibrary/book-stats/**"
+      - ".github/workflows/openlibrary-book-stats.yml"
+  push:
+    branches: [main]
+    paths:
+      - "openlibrary/book-stats/**"
+      - ".github/workflows/openlibrary-book-stats.yml"
+      - ".github/workflows/deploy-app.yml"
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openlibrary/book-stats
+    steps:
+      - uses: actions/checkout@v7
+
+      # Matches the distroless runtime's interpreter (see the Dockerfile).
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: openlibrary/book-stats/requirements*.txt
+
+      - run: pip install -r requirements-dev.txt
+      - run: ruff format --check .
+      - run: ruff check .
+      - run: pytest -q
+
+  build-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t book-stats:pr openlibrary/book-stats
+      # main.py reads its env at call time, not import time, so importing it
+      # loads every module and compiled dependency without any runtime config.
+      - run: docker run --rm book-stats:pr -c "import main"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy-app.yml
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    with:
+      app_path: openlibrary/book-stats
+      service_name: book-stats
+      region: us-west1
+      project_id: elliotx
+      artifact_registry_repo: book-stats
+      workload_identity_provider: projects/362369312254/locations/global/workloadIdentityPools/apps-github-pool/providers/apps-github-provider
+      service_account: book-stats-ci@elliotx.iam.gserviceaccount.com
