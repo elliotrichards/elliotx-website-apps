@@ -8,15 +8,18 @@ Keys are camelCase (the site's convention). Books are keyed by their cache
 key ("isbn/9780099598244" or "title/…|…"), so a read always finds its entry
 even when Open Library had no match. Title and author always come from the
 sheet: Open Library's are often a different edition's or carry a subtitle.
+
+Schema 2 adds category, tags and series to every read, and lets a book that
+is not finished (reading-list, currently-reading) have no finishedOn or order.
 """
 
 import re
 from collections import Counter
-from datetime import UTC
+from datetime import UTC, date
 
 from openlibrary import lookup_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ATTRIBUTION = "Book metadata and covers from Open Library (openlibrary.org)."
 
 
@@ -34,20 +37,24 @@ def books_export(reads, metadata, *, generated_at, warnings=()):
 
 def export_reads(reads, metadata):
     """
-    Oldest first, by finish date and then sheet row. `order` is the position
-    within the day; `reread` means an earlier read of the same book exists:
-    the same Open Library work when both matched, so a reread in another
-    edition counts, otherwise the same ISBN or title and author.
+    Finished books first, oldest to newest by finish date and then sheet row;
+    books with no finish date (reading-list, currently-reading) come last, in
+    sheet order. `order` is the position within the day, and null for a book
+    with no date. `reread` means an earlier finished read of the same book
+    exists: the same Open Library work when both matched, so a reread in
+    another edition counts, otherwise the same ISBN or title and author. Only
+    category "read" counts, so a did-not-finish never makes a later read a reread.
     """
     seen, per_day, ids = set(), Counter(), Counter()
     out = []
-    for r in sorted(reads, key=lambda r: (r.finished_date, r.row)):
+    for r in sorted(reads, key=lambda r: (r.finished_date is None, r.finished_date or date.min, r.row)):
         key = lookup_key(r)
         work = (metadata.get(key) or {}).get("work_key")
         same = f"work/{work}" if work else key
-        day = r.finished_date.isoformat()
-        per_day[day] += 1
-        base = f"{day}-{_slug(r.title) or 'book'}"
+        day = r.finished_date.isoformat() if r.finished_date else None
+        if day:
+            per_day[day] += 1
+        base = f"{day or r.category}-{_slug(r.title) or 'book'}"
         ids[base] += 1
         out.append(
             {
@@ -55,16 +62,20 @@ def export_reads(reads, metadata):
                 "book": key,
                 "title": r.title,
                 "author": r.author,
+                "category": r.category,
                 "finishedOn": day,
-                "order": per_day[day],
+                "order": per_day[day] if day else None,
                 "score": r.score,
                 "format": r.format,
                 "note": r.public_note,
                 "isbn": r.isbn,
-                "reread": same in seen,
+                "series": r.series,
+                "tags": list(r.tags),
+                "reread": r.category == "read" and same in seen,
             }
         )
-        seen.add(same)
+        if r.category == "read":
+            seen.add(same)
     return out
 
 
