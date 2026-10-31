@@ -233,6 +233,62 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 7. **Deploy the app**: merge the `tmdb/film-stats` PR in this repo. The push to `main` builds and deploys the real image.
 8. **Trigger once**: run `gcloud scheduler jobs run film-stats-daily --location=us-west1 --project=elliotx`, then check the service logs for the `film-stats run:` summary line, and `curl -s https://storage.googleapis.com/elliotx-film-stats-public/films.json | jq .warnings`.
 
+## `openlibrary/book-stats`
+
+The reading-log twin of `tmdb/film-stats`: a daily batch job that reads a hand-edited reading log from a Google Sheet, enriches each book from [Open Library](https://openlibrary.org/developers/api), and publishes every read plus each book's metadata as a single public `books.json` for the site's `/data/books` pages. Same shape, same deploy pattern, same Python tooling; the differences are below.
+
+```
+Cloud Scheduler (05:15 Europe/London)
+  --POST, OIDC token-->  Cloud Run service (book-stats, private)
+                            --Sheets API, ADC, read-only scope-->  Google Sheet ("Reading Log" tab)
+                            --GET /isbn/{isbn}.json, /works/{id}.json, /search.json-->  Open Library (no key)
+                            --openlibrary/index.json-->  GCS elliotx-book-cache (private)
+                            --books.json-->  GCS elliotx-book-stats-public (allUsers read, CORS: elliotx.com)
+```
+
+Open Library needs no API key, so there's no secret and no two-step `create_service` bootstrap: one Terraform apply creates everything. Requests carry a `User-Agent` naming the site, as Open Library asks of API clients.
+
+### Code
+
+- `src/sheet.py`: as film-stats, for the reading-log columns below. ISBNs are normalised to digits (hyphens and spaces dropped); a 9-digit number gets back the leading `0` Sheets strips from a numeric ISBN-10 cell.
+- `src/openlibrary.py`: the client (same retry/backoff as `tmdb.py`) and lookups. **With an ISBN**: `/isbn/{isbn}.json` for the edition (cover, page count), then its `/works/{id}.json` (subjects, first publish date), then a `search.json?q=key:/works/{id}` only if a cover, page count or first-publish year is still missing. An ISBN Open Library doesn't know falls back to a title search. **Without one**: `search.json?title=…&author=…&limit=1`. Subjects are trimmed to five, minus catalogue noise (`nyt:` list tags, "In library") and long Library of Congress headings.
+- **Cache**: one index object, `openlibrary/index.json`, keyed `isbn/{isbn}` or `title/{title}|{author}` (lower case, spaces collapsed). Only keys with no entry hit Open Library. A *no match* is cached too, as `null`, so an unmatched row doesn't cost a lookup every day; it's retried after 7 days, a match after 30.
+- **Lookup budget**: at most 150 lookups per run (`MAX_LOOKUPS_PER_RUN`), three at a time, against a 300s service timeout (Open Library is slower than TMDB). A backfill of hundreds of rows catches up over a few runs.
+- `src/books.py`: pure functions, fully unit-tested. `src/publish.py`: as film-stats.
+
+### Sheet contract
+
+Tab `Reading Log`, row 1 headers, one row per book finished. Header matching works as in film-stats.
+
+| Header | Required | Notes |
+| --- | --- | --- |
+| `title` | Yes | A row with no title is skipped quietly. Always shown as typed |
+| `finished_date` | Yes | Real date cell, or text `YYYY-MM-DD` |
+| `author` | No | Shown as typed; also used in the title search |
+| `score` | No | Out of 10, a whole number from **0** to 10 |
+| `isbn` | No | ISBN-10 or -13, hyphens allowed. The most reliable match; without it the title search can pick the wrong edition |
+| `format` | No | Free text such as `paperback`, `ebook`, `audiobook`; the site groups by it lower-cased |
+| `public_note` | No | One line, **published**. Over 280 characters is truncated with a warning |
+| `notes` | No | **Never** published: the app never looks this column up |
+
+A missing date skips the row with a warning; a bad score or ISBN warns and keeps the read (unscored, or matched by title). A book Open Library can't match is still published with its sheet title and author, and the site shows a text cover.
+
+### `books.json` (schemaVersion 1)
+
+- `reads`: every read, oldest first by finish date then sheet row: `id` (`2026-10-12-in-a-dark-dark-wood`), `book` (the cache key), `title`, `author`, `finishedOn`, `order` (position within the day), `score` (0–10 or null), `format`, `note` (from `public_note`), `isbn`, and `reread` (an earlier read of the same Open Library work, so another edition counts; for unmatched books, the same key).
+- `books`: one entry per key: `matched`, `workKey`, `coverId` (for `covers.openlibrary.org/b/id/{id}-L.jpg`; the site downloads covers at build time rather than hotlinking), `firstPublishYear`, `pages`, `subjects`.
+- `warnings`, `attribution`, `generatedAt`.
+
+Environment variables: `SHEET_ID`, `SHEET_TAB`, `CACHE_BUCKET`, `STATS_BUCKET` (all set via Terraform), `PORT` (set by Cloud Run).
+
+### First-time setup (manual steps)
+
+1. **Set repo variables** in `elliotx-website-terraform`: `BOOK_STATS_SHEET_ID` (the reading-log spreadsheet). Failed-run emails go to `FILM_STATS_ALERT_EMAIL`.
+2. **Apply**: merge the Terraform PR (`book-stats/`). This creates everything, with the service on the placeholder image.
+3. **Share the sheet** as Viewer with `book-stats-runner@elliotx.iam.gserviceaccount.com`. Untick "Notify people".
+4. **Deploy the app**: merge the `openlibrary/book-stats` PR in this repo.
+5. **Trigger once**: `gcloud scheduler jobs run book-stats-daily --location=us-west1 --project=elliotx`, then look for the `book-stats run:` log line and `gcloud storage cat gs://elliotx-book-stats-public/books.json | jq .warnings`.
+
 ## Adding a new app
 
 1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile, plus `eslint.config.mjs` and `.prettierrc.json` copied from `last-fm/now-playing`.
