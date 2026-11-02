@@ -187,6 +187,26 @@ def test_enrich_keeps_stale_copy_when_a_refresh_fails(monkeypatch):
     assert cache.saves == 0
 
 
+def test_refresh_keys_accepts_isbns_keys_and_all():
+    wanted = {"isbn/9780099598244": ("A", None), "title/b|": ("B", None)}
+    assert openlibrary.refresh_keys("978-0-09-959824-4, nope", wanted) == {"isbn/9780099598244"}
+    assert openlibrary.refresh_keys("title/b|", wanted) == {"title/b|"}
+    assert openlibrary.refresh_keys("ALL", wanted) == set(wanted)
+    assert openlibrary.refresh_keys("", wanted) == set()
+
+
+def test_enrich_refreshes_fresh_entries_on_request_and_keeps_them_if_it_fails(monkeypatch):
+    new = {**HIT, "pages": 321}
+    asked = patch_lookup(monkeypatch, {"isbn/1": new, "isbn/2": openlibrary.OpenLibraryError("down")})
+    fresh = NOW - timedelta(days=1)
+    cache = MemoryCache({"isbn/1": (HIT, fresh), "isbn/2": (HIT, fresh), "isbn/3": (HIT, fresh)})
+    wanted = {f"isbn/{i}": ("T", None) for i in (1, 2, 3)}
+    found, warnings, _ = openlibrary.enrich(wanted, None, cache, now=NOW, refresh={"isbn/1", "isbn/2"})
+    assert sorted(asked) == ["isbn/1", "isbn/2"]
+    assert found["isbn/1"] == new and found["isbn/2"] == HIT and found["isbn/3"] == HIT
+    assert warnings == []
+
+
 def test_enrich_defers_past_the_budget(monkeypatch):
     patch_lookup(monkeypatch, {f"isbn/{i}": HIT for i in range(5)})
     cache = MemoryCache()

@@ -2,6 +2,7 @@ import json
 import os
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from google.cloud import storage
 
@@ -11,7 +12,8 @@ import publish
 import sheet
 
 
-def run():
+def run(refresh=""):
+    """`refresh`: ISBNs (comma-separated) or "all" to re-fetch now, ignoring the cache's age."""
     # Read at call time, not import time, so `import main` works without any
     # runtime env (the PR build-check imports it to smoke-test the image).
     sheet_id = os.environ["SHEET_ID"]
@@ -30,7 +32,10 @@ def run():
     gcs = storage.Client()
     client = openlibrary.OpenLibraryClient()
     metadata, lookup_warnings, cache_hits = openlibrary.enrich(
-        wanted, client, openlibrary.GcsCache(gcs.bucket(cache_bucket))
+        wanted,
+        client,
+        openlibrary.GcsCache(gcs.bucket(cache_bucket)),
+        refresh=openlibrary.refresh_keys(refresh, wanted),
     )
 
     warnings = row_warnings + lookup_warnings
@@ -64,7 +69,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _run(self):
         try:
-            status, body = 200, run()
+            # ?refresh=9781455586691,9780099598244 (or ?refresh=all) re-fetches those books now.
+            query = parse_qs(urlparse(self.path).query)
+            status, body = 200, run(refresh=",".join(query.get("refresh", [])))
         except Exception as exc:
             print(f"run failed: {exc}")
             status, body = 500, {"error": str(exc)}

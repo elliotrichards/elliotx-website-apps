@@ -289,6 +289,13 @@ Environment variables: `SHEET_ID`, `SHEET_TAB`, `CACHE_BUCKET`, `STATS_BUCKET` (
 4. **Deploy the app**: merge the `openlibrary/book-stats` PR in this repo.
 5. **Trigger once**: `gcloud scheduler jobs run book-stats-daily --location=us-west1 --project=elliotx`, then look for the `book-stats run:` log line and `gcloud storage cat gs://elliotx-book-stats-public/books.json | jq .warnings`.
 
+**Refreshing books after editing Open Library**: matches are cached for 30 days (misses for 7), so a fixed cover or page count can take that long to show. To re-fetch chosen books now, call the service with a `refresh` parameter (ISBNs, comma-separated, or `all`; it still respects the 150-lookups-per-run cap):
+
+```sh
+URL=$(gcloud run services describe book-stats --region=us-west1 --project=elliotx --format='value(status.url)')
+curl -s -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL?refresh=9781455586691,9780099598244"
+```
+
 ## Adding a new app
 
 1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile, plus `eslint.config.mjs` and `.prettierrc.json` copied from `last-fm/now-playing`.
