@@ -14,7 +14,7 @@ on:
         description: Should match the app's Dockerfile base image version
         required: false
         type: string
-        default: '24'
+        default: "24"
 
 jobs:
   lint:

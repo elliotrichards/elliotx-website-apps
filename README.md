@@ -18,7 +18,7 @@ The first app here, `last-fm/now-playing`, is documented below in full as a work
     dependency-review.yml        # repo-wide, not per-app
 ```
 
-Each app folder is a self-contained Node/TypeScript project with its own `package.json`, `package-lock.json`, and `Dockerfile` — deliberately *not* an npm workspace. That was tried first and reverted: workspaces hoist `node_modules`/the lockfile to the repo root, which breaks a per-app-folder Docker build context. Revisit that decision only once a second app creates a real shared-tooling need.
+Each app folder is a self-contained Node/TypeScript project with its own `package.json`, `package-lock.json`, and `Dockerfile` — deliberately _not_ an npm workspace. That was tried first and reverted: workspaces hoist `node_modules`/the lockfile to the repo root, which breaks a per-app-folder Docker build context. Revisit that decision only once a second app creates a real shared-tooling need.
 
 Infra (GCP resources, IAM) for these apps lives in a **separate** repo, `elliotx-website-terraform`, one subfolder per app — see [Infrastructure](#infrastructure) below.
 
@@ -64,7 +64,7 @@ flowchart LR
 No long-lived credentials anywhere in this pipeline:
 
 - **GitHub → GCP**: Workload Identity Federation (WIF). GitHub Actions presents its OIDC token; GCP trusts it for this exact repo and exchanges it for short-lived access as a scoped service account. No service account key ever leaves GCP.
-- **API key → app**: Cloud Run's native Secret Manager integration mounts the secret as an env var at the *platform* level — the app just reads `process.env.LASTFM_API_KEY` like any other env var. There's no Secret Manager SDK call in the app code, and the key is never in the container image, in git, or in CI logs.
+- **API key → app**: Cloud Run's native Secret Manager integration mounts the secret as an env var at the _platform_ level — the app just reads `process.env.LASTFM_API_KEY` like any other env var. There's no Secret Manager SDK call in the app code, and the key is never in the container image, in git, or in CI logs.
 
 ### App code
 
@@ -75,11 +75,11 @@ Plain Node/TypeScript, zero runtime dependencies (Node's built-in `http` and glo
 
 Environment variables:
 
-| Variable          | Where it comes from                                             | Secret? |
-| ------------------ | ----------------------------------------------------------------- | ------- |
-| `LASTFM_API_KEY`   | Cloud Run, injected from Secret Manager (`secret_key_ref`)        | Yes     |
-| `LASTFM_USERNAME`  | Cloud Run, plain env var (set via Terraform)                      | No — public last.fm data, just kept out of source so it's not hardcoded |
-| `PORT`             | Cloud Run sets this automatically                                  | —       |
+| Variable          | Where it comes from                                        | Secret?                                                                 |
+| ----------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `LASTFM_API_KEY`  | Cloud Run, injected from Secret Manager (`secret_key_ref`) | Yes                                                                     |
+| `LASTFM_USERNAME` | Cloud Run, plain env var (set via Terraform)               | No — public last.fm data, just kept out of source so it's not hardcoded |
+| `PORT`            | Cloud Run sets this automatically                          | —                                                                       |
 
 ### Dockerfile
 
@@ -94,14 +94,14 @@ Two-stage build — `npm install && npm run build` (tsc) in a `node:24-slim` (Ac
 
 Everything below is repo-wide policy, not something specific to this one app — the same checks apply automatically to any new app folder that follows the pattern.
 
-| Check | Where | Runs |
-| --- | --- | --- |
-| Format (Prettier), lint (ESLint), typecheck (`tsc --noEmit`) | `lint-app.yml`, called per-app | Every PR touching that app |
-| `npm audit` (fails on high/critical) | `lint-app.yml` | Every PR touching that app |
-| Container image scan (Trivy, fixed vulnerabilities only) | `deploy-app.yml`, after build, before push | Every deploy — findings upload to the Security tab, same as CodeQL. Reports rather than blocks: most findings land in the base image's OS layer, which we don't control and can't patch faster than its maintainer does. Base images are pinned by digest in each app's Dockerfile so Dependabot proposes updates on its own schedule instead. |
-| [CodeQL](https://codeql.github.com/) static analysis | `codeql.yml` | Push/PR to `main`, plus a weekly scheduled scan so newly-disclosed CVEs in unchanged code still get caught |
-| [Dependency review](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review) | `dependency-review.yml` | Every PR — flags newly-introduced vulnerable dependencies in the diff itself |
-| [Dependabot](https://docs.github.com/en/code-security/dependabot) version updates | `dependabot.yml` | Weekly, opens PRs for outdated npm packages, base Docker image, and GitHub Actions versions |
+| Check                                                                                                                                                | Where                                      | Runs                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Format (Prettier), lint (ESLint), typecheck (`tsc --noEmit`)                                                                                         | `lint-app.yml`, called per-app             | Every PR touching that app                                                                                                                                                                                                                                                                                                                     |
+| `npm audit` (fails on high/critical)                                                                                                                 | `lint-app.yml`                             | Every PR touching that app                                                                                                                                                                                                                                                                                                                     |
+| Container image scan (Trivy, fixed vulnerabilities only)                                                                                             | `deploy-app.yml`, after build, before push | Every deploy — findings upload to the Security tab, same as CodeQL. Reports rather than blocks: most findings land in the base image's OS layer, which we don't control and can't patch faster than its maintainer does. Base images are pinned by digest in each app's Dockerfile so Dependabot proposes updates on its own schedule instead. |
+| [CodeQL](https://codeql.github.com/) static analysis                                                                                                 | `codeql.yml`                               | Push/PR to `main`, plus a weekly scheduled scan so newly-disclosed CVEs in unchanged code still get caught                                                                                                                                                                                                                                     |
+| [Dependency review](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review) | `dependency-review.yml`                    | Every PR — flags newly-introduced vulnerable dependencies in the diff itself                                                                                                                                                                                                                                                                   |
+| [Dependabot](https://docs.github.com/en/code-security/dependabot) version updates                                                                    | `dependabot.yml`                           | Weekly, opens PRs for outdated npm packages, base Docker image, and GitHub Actions versions                                                                                                                                                                                                                                                    |
 
 A new app's own `package.json` needs `format:check`, `lint`, and `typecheck` npm scripts for `lint-app.yml` to call — copy `last-fm/now-playing`'s `eslint.config.mjs`, `.prettierrc.json`, and `package.json` scripts as the starting point.
 
@@ -137,7 +137,7 @@ A daily batch job, not an HTTP API for site visitors: pulls yesterday's (UTC) la
 Same deploy pattern as `now-playing` (WIF, Docker build in CI, Cloud Run, Secret Manager `secret_key_ref`), with two differences:
 
 - **Trigger**: no public traffic. Cloud Scheduler (`elliotx-website-terraform/last-fm-recent-tracks`) hits the service once a day at 06:00 in `Europe/London` (Cloud Scheduler applies the BST/GMT offset itself — no manual UTC math), authenticated with a short-lived OIDC token from a dedicated invoker service account. The service itself sets `allow_unauthenticated = false`, so nothing else can call it.
-- **Secret reuse**: shares the same `lastfm-api-key` Secret Manager secret as `now-playing` (same last.fm account) rather than provisioning a second one — the secret's *container* is still owned by `now-playing`'s Terraform state; this app's state only adds an IAM accessor grant on it.
+- **Secret reuse**: shares the same `lastfm-api-key` Secret Manager secret as `now-playing` (same last.fm account) rather than provisioning a second one — the secret's _container_ is still owned by `now-playing`'s Terraform state; this app's state only adds an IAM accessor grant on it.
 
 ```
 Cloud Scheduler (06:00 Europe/London)
@@ -169,7 +169,7 @@ Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Ru
 ### Code
 
 - `src/sheet.py`: reads the sheet and validates rows. Dates are requested as serial numbers, not formatted strings, so the sheet's locale can't make `03/04` ambiguous. Text cells in ISO `YYYY-MM-DD` still parse.
-- `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of *trimmed* responses in one index object (`tmdb/index.json`), read once and written once per run. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are used as-is and refreshed when there's room, and the old copy is kept if TMDB is down.
+- `src/tmdb.py`: TMDB client with retry/backoff (429, 5xx and network errors; honours `Retry-After`; 404 is final), plus a GCS cache of _trimmed_ responses in one index object (`tmdb/index.json`), read once and written once per run. Fresh entries (under 30 days old) skip TMDB entirely. Stale ones are used as-is and refreshed when there's room, and the old copy is kept if TMDB is down.
 - **Episode titles**: for TV rows with `season` and `episode`, one `/tv/{id}/season/{n}` lookup per show and season watched, trimmed to each episode's name, air date and runtime (no overview, which would spoil the log) and cached the same way in a separate object, `tmdb/seasons.json` (older builds read every key in `tmdb/index.json` as `type/id`). A cached season missing an episode that's been logged is refetched straight away, for shows that were still airing when it was cached. A season or episode TMDB doesn't have is a warning; the viewing is kept without a title.
 - **Lookup budget**: at most 600 TMDB lookups per run (`MAX_FETCHES_PER_RUN`), four at a time, which is about 40s against the service's 120s timeout. Titles with no cache entry come first, then the stalest; seasons get whatever's left after titles. Anything over the cap still counts in the totals, gets one combined "N titles are waiting for a TMDB lookup" warning, and is filled in by later runs. So a big backfill catches up over a few days on its own; trigger the Scheduler job by hand to speed it up.
 - **Trim version**: each cache entry records the `TRIM_VERSION` that trimmed it. Bumping it (whenever `trim()` keeps new fields) makes every older entry count as the stalest of all, so they're refreshed first, within the usual lookup budget, and still used until then.
@@ -180,19 +180,19 @@ Same deploy pattern as `recent-tracks` (WIF, Docker build in CI, Trivy, Cloud Ru
 
 Tab `Watch Log`, row 1 headers, one row per viewing (a rewatch is another row with the same ID). Columns are found by **header name**, not position, so they can be in any order. Header matching ignores case, and spaces count as underscores (`Watched Date` works). Unrecognised columns are ignored.
 
-| Header | Required | Notes |
-| --- | --- | --- |
-| `tmdb_id` | Yes | Integer, the source of truth |
-| `watched_date` | Yes | Real date cell, or text `YYYY-MM-DD` |
-| `title` | No | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing. |
-| `media_type` | No | `movie` or `tv`; blank (or no column) means `movie` |
-| `score` | No | My rating out of 10, a whole number from 1 to 10 |
-| `rating` | No | Old column, 0.5–5 in half steps. Used, doubled, only for a row with no `score`; delete it once every row has one |
-| `public_note` | No | One line, **published** on the site next to the viewing. Over 280 characters is truncated with a warning |
-| `format` | No | Free text such as `Cinema`, `Home` or `Streaming`, published as typed |
-| `season` | No | TV only: the episode's season, a whole number from 0 (TMDB's specials). Fill in with `episode` or not at all |
-| `episode` | No | TV only: the episode number within the season, from 1. Fill in with `season` or not at all |
-| `notes` | No | **Never** published: the app never looks this column up |
+| Header         | Required | Notes                                                                                                            |
+| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `tmdb_id`      | Yes      | Integer, the source of truth                                                                                     |
+| `watched_date` | Yes      | Real date cell, or text `YYYY-MM-DD`                                                                             |
+| `title`        | No       | Label only; TMDB's title wins. Used as a fallback if TMDB has nothing.                                           |
+| `media_type`   | No       | `movie` or `tv`; blank (or no column) means `movie`                                                              |
+| `score`        | No       | My rating out of 10, a whole number from 1 to 10                                                                 |
+| `rating`       | No       | Old column, 0.5–5 in half steps. Used, doubled, only for a row with no `score`; delete it once every row has one |
+| `public_note`  | No       | One line, **published** on the site next to the viewing. Over 280 characters is truncated with a warning         |
+| `format`       | No       | Free text such as `Cinema`, `Home` or `Streaming`, published as typed                                            |
+| `season`       | No       | TV only: the episode's season, a whole number from 0 (TMDB's specials). Fill in with `episode` or not at all     |
+| `episode`      | No       | TV only: the episode number within the season, from 1. Fill in with `season` or not at all                       |
+| `notes`        | No       | **Never** published: the app never looks this column up                                                          |
 
 A missing required header, a duplicated header or an empty tab fails the run, which triggers the alert, rather than publishing an empty `films.json`.
 
@@ -228,14 +228,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 2. **Set repo variables** in `elliotx-website-terraform` (Settings → Secrets and variables → Actions → Variables): `FILM_STATS_SHEET_ID`, and optionally `FILM_STATS_ALERT_EMAIL` for failed-run emails.
 3. **First apply** (`create_service = false`, the default): merge the Terraform PR. This creates the APIs, SAs, buckets, secret container and Artifact Registry.
 4. **Share the sheet** as Viewer with the `runner_service_account_email` output (`film-stats-runner@elliotx.iam.gserviceaccount.com`). Untick "Notify people".
-5. **Add the TMDB token**: from a TMDB account, go to Settings → API and copy the *API Read Access Token* (the long JWT, not the v3 API key). Then run `printf %s "$TOKEN" | gcloud secrets versions add tmdb-api-token --data-file=- --project=elliotx`.
+5. **Add the TMDB token**: from a TMDB account, go to Settings → API and copy the _API Read Access Token_ (the long JWT, not the v3 API key). Then run `printf %s "$TOKEN" | gcloud secrets versions add tmdb-api-token --data-file=- --project=elliotx`.
 6. **Second apply**: set `create_service` to `true` in `film-stats/variables.tf` and merge. This creates the service (on the placeholder image), Scheduler job and alert.
 7. **Deploy the app**: merge the `tmdb/film-stats` PR in this repo. The push to `main` builds and deploys the real image.
 8. **Trigger once**: run `gcloud scheduler jobs run film-stats-daily --location=us-west1 --project=elliotx`, then check the service logs for the `film-stats run:` summary line, and `curl -s https://storage.googleapis.com/elliotx-film-stats-public/films.json | jq .warnings`.
 
 ## `openlibrary/book-stats`
 
-The reading-log twin of `tmdb/film-stats`: a daily batch job that reads a hand-edited reading log from a Google Sheet, enriches each book from [Open Library](https://openlibrary.org/developers/api), and publishes every read plus each book's metadata as a single public `books.json` for the site's `/data/books` pages. Same shape, same deploy pattern, same Python tooling; the differences are below.
+The reading-log twin of `tmdb/film-stats`: a daily batch job that reads a hand-edited reading log from a Google Sheet (finished books, plus the books being read, on the reading list, or given up on), enriches each book from [Open Library](https://openlibrary.org/developers/api), and publishes every row plus each book's metadata as a single public `books.json` for the site's `/data/books` pages. Same shape, same deploy pattern, same Python tooling; the differences are below.
 
 ```
 Cloud Scheduler (05:15 Europe/London)
@@ -252,31 +252,34 @@ Open Library needs no API key, so there's no secret and no two-step `create_serv
 
 - `src/sheet.py`: as film-stats, for the reading-log columns below. ISBNs are normalised to digits (hyphens and spaces dropped); a 9-digit number gets back the leading `0` Sheets strips from a numeric ISBN-10 cell.
 - `src/openlibrary.py`: the client (same retry/backoff as `tmdb.py`) and lookups. **With an ISBN**: `/isbn/{isbn}.json` for the edition (cover, page count), then its `/works/{id}.json` (subjects, first publish date), then a `search.json?q=key:/works/{id}` only if a cover, page count or first-publish year is still missing. An ISBN Open Library doesn't know falls back to a title search. **Without one**: `search.json?title=…&author=…&limit=1`. Subjects are trimmed to five, minus catalogue noise (`nyt:` list tags, "In library") and long Library of Congress headings.
-- **Cache**: one index object, `openlibrary/index.json`, keyed `isbn/{isbn}` or `title/{title}|{author}` (lower case, spaces collapsed). Only keys with no entry hit Open Library. A *no match* is cached too, as `null`, so an unmatched row doesn't cost a lookup every day; it's retried after 7 days, a match after 30.
+- **Cache**: one index object, `openlibrary/index.json`, keyed `isbn/{isbn}` or `title/{title}|{author}` (lower case, spaces collapsed). Only keys with no entry hit Open Library. A _no match_ is cached too, as `null`, so an unmatched row doesn't cost a lookup every day; it's retried after 7 days, a match after 30.
 - **Lookup budget**: at most 150 lookups per run (`MAX_LOOKUPS_PER_RUN`), three at a time, against a 300s service timeout (Open Library is slower than TMDB). A backfill of hundreds of rows catches up over a few runs.
 - `src/books.py`: pure functions, fully unit-tested. `src/publish.py`: as film-stats.
 
 ### Sheet contract
 
-Tab `Reading Log`, row 1 headers, one row per book finished. Header matching works as in film-stats.
+Tab `Reading Log`, row 1 headers, one row per book (or per read: a reread is another row). Header matching works as in film-stats, so columns can be in any order and extra columns are ignored.
 
-| Header | Required | Notes |
-| --- | --- | --- |
-| `title` | Yes | A row with no title is skipped quietly. Always shown as typed |
-| `finished_date` | Yes | Real date cell, or text `YYYY-MM-DD` |
-| `author` | No | Shown as typed; also used in the title search |
-| `score` | No | Out of 10, a whole number from **0** to 10 |
-| `isbn` | No | ISBN-10 or -13, hyphens allowed. The most reliable match; without it the title search can pick the wrong edition |
-| `format` | No | Free text such as `paperback`, `ebook`, `audiobook`; the site groups by it lower-cased |
-| `public_note` | No | One line, **published**. Over 280 characters is truncated with a warning |
-| `notes` | No | **Never** published: the app never looks this column up |
+| Header          | Required        | Notes                                                                                                                                                                                                                                                           |
+| --------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`         | Yes             | A row with no title is skipped quietly. Always shown as typed                                                                                                                                                                                                   |
+| `finished_date` | Yes, for `read` | Real date cell, or text `YYYY-MM-DD`. Leave it blank for any other category                                                                                                                                                                                     |
+| `category`      | No              | Where the book is: `read`, `currently-reading`, `reading-list` or `did-not-finish`. Case and spaces are forgiven (`Reading list` works). Blank means `read`, so a sheet without the column behaves as it did before. Anything else skips the row with a warning |
+| `author`        | No              | Shown as typed; also used in the title search                                                                                                                                                                                                                   |
+| `score`         | No              | Out of 10, a whole number from **0** to 10                                                                                                                                                                                                                      |
+| `isbn`          | No              | ISBN-10 or -13, hyphens allowed. The most reliable match; without it the title search can pick the wrong edition                                                                                                                                                |
+| `format`        | No              | Free text such as `paperback`, `ebook`, `audiobook`; the site groups by it lower-cased                                                                                                                                                                          |
+| `tags`          | No              | Genres, comma-separated (`non-fiction, memoir, politics`). Lower-cased, tidied and de-duplicated; the site makes one browse page per tag, so a typo makes its own                                                                                               |
+| `series`        | No              | e.g. `Jack Reacher #9`. Published as typed                                                                                                                                                                                                                      |
+| `public_note`   | No              | One line, **published**. Over 280 characters is truncated with a warning                                                                                                                                                                                        |
+| `notes`         | No              | **Never** published: the app never looks this column up                                                                                                                                                                                                         |
 
-A missing date skips the row with a warning; a bad score or ISBN warns and keeps the read (unscored, or matched by title). A book Open Library can't match is still published with its sheet title and author, and the site shows a text cover.
+A `read` row with no date (or any row with a date that isn't one) is skipped with a warning; an unknown `category` skips the row too. A bad score or ISBN warns and keeps the row (unscored, or matched by title). A book Open Library can't match is still published with its sheet title and author, and the site shows a text cover. Books that aren't finished are looked up like any other, so the reading list gets covers and page counts too.
 
-### `books.json` (schemaVersion 1)
+### `books.json` (schemaVersion 2)
 
-- `reads`: every read, oldest first by finish date then sheet row: `id` (`2026-10-12-in-a-dark-dark-wood`), `book` (the cache key), `title`, `author`, `finishedOn`, `order` (position within the day), `score` (0–10 or null), `format`, `note` (from `public_note`), `isbn`, and `reread` (an earlier read of the same Open Library work, so another edition counts; for unmatched books, the same key).
-- `books`: one entry per key: `matched`, `workKey`, `coverId` (for `covers.openlibrary.org/b/id/{id}-L.jpg`; the site downloads covers at build time rather than hotlinking), `firstPublishYear`, `pages`, `subjects`.
+- `reads`: every row. Finished books come first, oldest first by finish date then sheet row; books with no date (reading list, currently reading, did not finish) follow in sheet order. Each has `id` (`2026-10-12-in-a-dark-dark-wood`, or the category in place of the date for an undated book: `reading-list-artemis`), `book` (the cache key), `title`, `author`, `category`, `finishedOn` and `order` (position within the day; both null when there's no date), `score` (0–10 or null), `format`, `note` (from `public_note`), `isbn`, `series`, `tags` (a list, possibly empty) and `reread` (an earlier `read` of the same Open Library work, so another edition counts; for unmatched books, the same key. Only `read` rows count, so giving up on a book never makes a later read a reread).
+- `books`: one entry per key, for finished and unfinished books alike: `matched`, `workKey`, `coverId` (for `covers.openlibrary.org/b/id/{id}-L.jpg`; the site downloads covers at build time rather than hotlinking), `firstPublishYear`, `pages`, `subjects`.
 - `warnings`, `attribution`, `generatedAt`.
 
 Environment variables: `SHEET_ID`, `SHEET_TAB`, `CACHE_BUCKET`, `STATS_BUCKET` (all set via Terraform), `PORT` (set by Cloud Run).
@@ -301,5 +304,5 @@ curl -s -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" "
 1. New folder: `<integration>/<app-name>/` — self-contained `package.json`, `Dockerfile`, own lockfile, plus `eslint.config.mjs` and `.prettierrc.json` copied from `last-fm/now-playing`.
 2. Copy `last-fm-now-playing.yml` as `<app-name>.yml`, update the path filter and the `with:` inputs (service name, GAR repo, deploy service account) — this one file wires up both lint-on-PR and deploy-on-push.
 3. Add a `package-ecosystem: npm` and a `package-ecosystem: docker` entry for the new app's directory in `.github/dependabot.yml`. CodeQL and dependency review are already repo-wide — nothing to add there.
-4. In `elliotx-website-terraform`, add a new subfolder (own Terraform state, matching the "keep infra separate" convention) that calls `modules/cloud-run-service` and `modules/github-ci-service-account` — pointing at the *existing* shared WIF pool by name rather than creating a new one.
+4. In `elliotx-website-terraform`, add a new subfolder (own Terraform state, matching the "keep infra separate" convention) that calls `modules/cloud-run-service` and `modules/github-ci-service-account` — pointing at the _existing_ shared WIF pool by name rather than creating a new one.
 5. First `terraform apply` stands up the service on a placeholder image; the first push to the new app's folder replaces it with the real thing.
