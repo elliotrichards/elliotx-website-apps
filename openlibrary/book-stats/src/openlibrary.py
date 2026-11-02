@@ -236,7 +236,24 @@ class GcsCache:
         )
 
 
-def enrich(wanted, client, cache, now=None, max_lookups=MAX_LOOKUPS_PER_RUN, workers=FETCH_WORKERS):
+def refresh_keys(spec, wanted):
+    """
+    The keys in `wanted` that a manual refresh asks for. `spec` is a comma-
+    separated string of ISBNs (dashes and spaces allowed), full cache keys
+    ("isbn/9780099598244", "title/..."), or "all". Anything that isn't a
+    wanted book is ignored.
+    """
+    items = [i.strip() for i in (spec or "").split(",") if i.strip()]
+    if "all" in (i.lower() for i in items):
+        return set(wanted)
+    keys = set()
+    for item in items:
+        digits = re.sub(r"[^0-9Xx]", "", item).upper()
+        keys.add(item if item in wanted else f"isbn/{digits}")
+    return keys & set(wanted)
+
+
+def enrich(wanted, client, cache, now=None, max_lookups=MAX_LOOKUPS_PER_RUN, workers=FETCH_WORKERS, refresh=()):
     """
     Returns ({key: trimmed metadata or None}, warnings, cache_hits) for
     `wanted`, {key: (title, author)}. A key that's absent from the result
@@ -247,10 +264,14 @@ def enrich(wanted, client, cache, now=None, max_lookups=MAX_LOOKUPS_PER_RUN, wor
     first, after keys with no entry at all. A failed lookup keeps any stale
     copy; a key with neither gets a warning. Keys that didn't fit in the
     budget get one combined warning and are picked up by later runs.
+
+    `refresh` is a set of keys to re-fetch now even if their cache entry is
+    fresh (see refresh_keys). They go first in the queue, still within the
+    budget, and a failed refresh keeps the cached copy like any other.
     """
     now = now or datetime.now(UTC)
     entries = cache.load()
-    found, missing, stale = {}, [], []
+    found, missing, stale, forced = {}, [], [], []
 
     for key in sorted(wanted):
         entry = entries.get(key)
@@ -259,12 +280,14 @@ def enrich(wanted, client, cache, now=None, max_lookups=MAX_LOOKUPS_PER_RUN, wor
             continue
         data, cached_at = entry
         found[key] = data
-        if now - cached_at >= (CACHE_MAX_AGE if data is not None else MISS_MAX_AGE):
+        if key in refresh:
+            forced.append(key)
+        elif now - cached_at >= (CACHE_MAX_AGE if data is not None else MISS_MAX_AGE):
             stale.append(key)
 
     stale.sort(key=lambda k: entries[k][1])
-    todo = (missing + stale)[: max(max_lookups, 0)]
-    deferred = len([k for k in missing[len(todo) :] if k not in found])
+    todo = (forced + missing + stale)[: max(max_lookups, 0)]
+    deferred = len([k for k in missing if k not in todo])
 
     def attempt(key):
         try:
