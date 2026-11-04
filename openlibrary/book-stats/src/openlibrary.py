@@ -28,29 +28,19 @@ MAX_LOOKUPS_PER_RUN = 150
 
 # Bumped whenever trim() keeps new fields. Entries cached under an older
 # version are treated as the stalest of all: still used, but refreshed first.
-TRIM_VERSION = 1
+TRIM_VERSION = 2
 
-# Matches are refreshed after this long, for covers and subjects added since.
+# Matches are refreshed after this long, for covers and other details added since.
 # A miss is retried sooner: it may be a typo since fixed in the sheet (which
 # changes the key anyway), or a book Open Library has added since.
 CACHE_MAX_AGE = timedelta(days=30)
 MISS_MAX_AGE = timedelta(days=7)
 
-SUBJECT_LIMIT = 5
-# Catalogue housekeeping, not subjects anyone would browse by.
-SUBJECT_NOISE = {
-    "accessible book",
-    "in library",
-    "large type books",
-    "lending library",
-    "new york times bestseller",
-    "new york times reviewed",
-    "open library staff picks",
-    "protected daisy",
-}
-SUBJECT_MAX_LENGTH = 40
+# A blurb is shown whole up to this length; longer ones are cut at a sentence.
+DESCRIPTION_LIMIT = 1500
+PUBLISHER_MAX_LENGTH = 60
 
-SEARCH_FIELDS = "key,cover_i,first_publish_year,number_of_pages_median,subject"
+SEARCH_FIELDS = "key,cover_i,first_publish_year,number_of_pages_median"
 
 
 class OpenLibraryError(Exception):
@@ -159,7 +149,9 @@ def _by_isbn(client, isbn):
         "cover_id": _first_cover(edition.get("covers")) or _first_cover(work.get("covers")),
         "first_publish_year": _year(work.get("first_publish_date")),
         "pages": _positive(edition.get("number_of_pages")),
-        "subjects": trim_subjects(work.get("subjects")),
+        "description": trim_description(work.get("description")),
+        "publisher": trim_publisher(edition.get("publishers")),
+        "edition_year": _year(edition.get("publish_date")),
     }
     if work_key and None in (data["cover_id"], data["first_publish_year"], data["pages"]):
         doc = client.search(q=f"key:/works/{work_key}")
@@ -167,7 +159,6 @@ def _by_isbn(client, isbn):
             found = trim_search(doc)
             for field in ("cover_id", "first_publish_year", "pages"):
                 data[field] = data[field] or found[field]
-            data["subjects"] = data["subjects"] or found["subjects"]
     return data
 
 
@@ -178,29 +169,47 @@ def trim_search(doc):
         "cover_id": _first_cover([doc.get("cover_i")]),
         "first_publish_year": _positive(doc.get("first_publish_year")),
         "pages": _positive(doc.get("number_of_pages_median")),
-        "subjects": trim_subjects(doc.get("subject")),
     }
 
 
-def trim_subjects(subjects):
+def trim_description(value):
     """
-    Up to SUBJECT_LIMIT subjects in Open Library's own order, which puts the
-    common ones first. Drops catalogue noise ("nyt:…" list entries, "In
-    library"), long Library of Congress headings and repeats in another case.
+    A work's blurb as plain paragraphs separated by blank lines, or None.
+
+    Open Library stores a string or {"type": ..., "value": ...}, often with
+    markdown: links, "([source][1])" footnotes and a "----------" rule
+    followed by catalogue extras ("Contains: ..."). Keeps the text before any
+    rule, turns links into their text, drops footnotes, and cuts at a
+    sentence once past DESCRIPTION_LIMIT.
     """
-    out, seen = [], set()
-    for raw in subjects or []:
-        if not isinstance(raw, str):
-            continue
-        s = " ".join(raw.split())
-        lower = s.lower()
-        if not s or ":" in s or lower in SUBJECT_NOISE or len(s) > SUBJECT_MAX_LENGTH or lower in seen:
-            continue
-        seen.add(lower)
-        out.append(s[0].upper() + s[1:])
-        if len(out) == SUBJECT_LIMIT:
-            break
-    return out
+    if isinstance(value, dict):
+        value = value.get("value")
+    if not isinstance(value, str):
+        return None
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.split(r"\n\s*-{3,}", text, maxsplit=1)[0]
+    text = re.sub(r"^\s*\[\d+\]:.*$", "", text, flags=re.M)  # footnote definitions
+    text = re.sub(r"\(\s*\[[^\]]*\]\[\d+\]\s*\)", "", text)  # ([source][1])
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)  # [text](url)
+    text = re.sub(r"\[([^\]]+)\]\[\d+\]", r"\1", text)  # [text][1]
+    text = re.sub(r"[*_`]{1,3}", "", text)
+    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
+    text = "\n\n".join(p for p in paragraphs if p)
+    if len(text) > DESCRIPTION_LIMIT:
+        cut = text[:DESCRIPTION_LIMIT]
+        end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "), cut.rfind(".\n"))
+        text = cut[: end + 1] if end > DESCRIPTION_LIMIT // 2 else cut.rsplit(" ", 1)[0] + "…"
+    return text or None
+
+
+def trim_publisher(publishers):
+    """The edition's first publisher, or None. Open Library lists them as plain strings."""
+    for raw in publishers or []:
+        if isinstance(raw, str):
+            s = " ".join(raw.split())
+            if s and len(s) <= PUBLISHER_MAX_LENGTH:
+                return s
+    return None
 
 
 class GcsCache:

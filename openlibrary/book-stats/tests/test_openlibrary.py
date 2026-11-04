@@ -43,7 +43,7 @@ def client(routes):
 
 
 EDITION = {"works": [{"key": "/works/OL1W"}], "covers": [-1, 111], "number_of_pages": 352}
-WORK = {"covers": [222], "first_publish_date": "July 2015", "subjects": ["Fiction", "nyt:x=1", "Thrillers"]}
+WORK = {"covers": [222], "first_publish_date": "July 2015"}
 
 
 def read(title="In a Dark, Dark Wood", author="Ruth Ware", isbn=None):
@@ -71,7 +71,9 @@ def test_by_isbn_uses_edition_then_work():
         "cover_id": 111,  # the edition's own cover, skipping the removed -1
         "first_publish_year": 2015,
         "pages": 352,
-        "subjects": ["Fiction", "Thrillers"],
+        "description": None,
+        "publisher": None,
+        "edition_year": None,
     }
     assert [p for p, _ in session.requests] == ["/isbn/9780099598244.json", "/works/OL1W.json"]
 
@@ -82,7 +84,7 @@ def test_by_isbn_fills_gaps_from_a_search_by_work_key():
     c, session = client(
         {
             "/isbn/9780099598244.json": FakeResponse(200, edition),
-            "/works/OL1W.json": FakeResponse(200, {"subjects": ["Mystery"]}),
+            "/works/OL1W.json": FakeResponse(200, {}),
             "/search.json": FakeResponse(200, {"docs": [doc]}),
         }
     )
@@ -92,13 +94,54 @@ def test_by_isbn_fills_gaps_from_a_search_by_work_key():
         "cover_id": 333,
         "first_publish_year": 2015,
         "pages": 340,
-        "subjects": ["Mystery"],
+        "description": None,
+        "publisher": None,
+        "edition_year": None,
     }
     assert session.requests[-1][1]["q"] == "key:/works/OL1W"
 
 
+def test_by_isbn_keeps_description_publisher_and_edition_year():
+    edition = {**EDITION, "publishers": ["Pan Macmillan", "Other"], "publish_date": "March 4, 2019"}
+    work = {**WORK, "description": {"type": "/type/text", "value": "A tense debut.\r\n\r\nSecond paragraph."}}
+    c, _ = client({"/isbn/9780099598244.json": FakeResponse(200, edition), "/works/OL1W.json": FakeResponse(200, work)})
+    data = openlibrary.lookup(c, "isbn/9780099598244", "T", "A")
+    assert data["description"] == "A tense debut.\n\nSecond paragraph."
+    assert data["publisher"] == "Pan Macmillan"
+    assert data["edition_year"] == 2019
+
+
+def test_trim_description_cleans_markdown_and_extras():
+    raw = (
+        "Behind the scenes at [Newsnight](https://example.com/n) and **beyond**.\n\n"
+        "Interviews with the famous. ([source][1])\n\n"
+        "----------\nContains: Part one, Part two\n\n[1]: https://example.com/src"
+    )
+    assert openlibrary.trim_description(raw) == (
+        "Behind the scenes at Newsnight and beyond.\n\nInterviews with the famous."
+    )
+    assert openlibrary.trim_description("   ") is None
+    assert openlibrary.trim_description(None) is None
+    assert openlibrary.trim_description(42) is None
+
+
+def test_trim_description_cuts_long_text_at_a_sentence():
+    text = " ".join(["This is a sentence."] * 200)
+    out = openlibrary.trim_description(text)
+    assert len(out) <= openlibrary.DESCRIPTION_LIMIT
+    assert out.endswith("sentence.")
+    assert openlibrary.trim_description("word " * 600).endswith("…")
+
+
+def test_trim_publisher_takes_the_first_usable_name():
+    assert openlibrary.trim_publisher(["  Pan   Macmillan ", "x"]) == "Pan Macmillan"
+    assert openlibrary.trim_publisher(["x" * 61, "Penguin"]) == "Penguin"
+    assert openlibrary.trim_publisher([]) is None
+    assert openlibrary.trim_publisher(None) is None
+
+
 def test_unknown_isbn_falls_back_to_title_search():
-    doc = {"key": "/works/OL9W", "cover_i": 9, "first_publish_year": 2019, "subject": ["Robots"]}
+    doc = {"key": "/works/OL9W", "cover_i": 9, "first_publish_year": 2019}
     c, session = client({"/search.json": FakeResponse(200, {"docs": [doc]})})
     data = openlibrary.lookup(c, "isbn/0000000000", "Klara and the Sun", "Kazuo Ishiguro")
     assert data["work_key"] == "OL9W" and data["pages"] is None
@@ -121,11 +164,6 @@ def test_retries_server_errors_then_gives_up():
     else:
         raise AssertionError("expected OpenLibraryError")
     assert c.calls == openlibrary.MAX_ATTEMPTS
-
-
-def test_trim_subjects_drops_noise_and_repeats():
-    subjects = ["fiction", "Fiction", "In library", "nyt:list=1", "x" * 41, "Thrillers", "a", "b", "c", "d"]
-    assert openlibrary.trim_subjects(subjects) == ["Fiction", "Thrillers", "A", "B", "C"]
 
 
 class MemoryCache:
@@ -155,7 +193,7 @@ def patch_lookup(monkeypatch, answers):
     return asked
 
 
-HIT = {"work_key": "OL1W", "cover_id": 1, "first_publish_year": 2015, "pages": 300, "subjects": []}
+HIT = {"work_key": "OL1W", "cover_id": 1, "first_publish_year": 2015, "pages": 300}
 
 
 def test_enrich_skips_fresh_entries_and_caches_misses(monkeypatch):
@@ -241,7 +279,7 @@ def test_gcs_cache_round_trips_and_treats_old_versions_as_stalest():
     cache.save({"isbn/1": (HIT, NOW), "title/b|": (None, NOW)})
     assert cache.load() == {"isbn/1": (HIT, NOW), "title/b|": (None, NOW)}
 
-    bucket.store["body"] = bucket.store["body"].replace('"version":1', '"version":0')
+    bucket.store["body"] = bucket.store["body"].replace(f'"version":{openlibrary.TRIM_VERSION}', '"version":0')
     assert cache.load()["isbn/1"][1] == datetime.min.replace(tzinfo=UTC)
 
     bucket.store["body"] = "not json"

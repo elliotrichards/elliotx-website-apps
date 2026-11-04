@@ -11,6 +11,9 @@ sheet: Open Library's are often a different edition's or carry a subtitle.
 
 Schema 2 adds category, tags and series to every read, and lets a book that
 is not finished (reading-list, currently-reading) have no finishedOn or order.
+Schema 3 adds description (plain text paragraphs), publisher and editionYear
+(the edition I looked up, which may differ from the one I read) to each book,
+all null when Open Library has none.
 """
 
 import re
@@ -19,7 +22,7 @@ from datetime import UTC, date
 
 from openlibrary import lookup_key
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ATTRIBUTION = "Book metadata and covers from Open Library (openlibrary.org)."
 
 
@@ -88,7 +91,9 @@ def export_book(m):
         "coverId": m.get("cover_id"),
         "firstPublishYear": m.get("first_publish_year"),
         "pages": m.get("pages"),
-        "subjects": list(m.get("subjects") or []),
+        "description": m.get("description"),
+        "publisher": m.get("publisher"),
+        "editionYear": m.get("edition_year"),
     }
 
 
