@@ -22,7 +22,6 @@ def test_export_shape_and_order():
             "cover_id": 111,
             "first_publish_year": 2015,
             "pages": 352,
-            "subjects": ["Thrillers"],
         },
         "title/second|author": None,
     }
@@ -54,7 +53,9 @@ def test_export_shape_and_order():
         "coverId": 111,
         "firstPublishYear": 2015,
         "pages": 352,
-        "subjects": ["Thrillers"],
+        "description": None,
+        "publisher": None,
+        "editionYear": None,
     }
     # No match still gets an entry, so the site can render it with a placeholder.
     assert out["books"]["title/second|author"] == {
@@ -63,7 +64,9 @@ def test_export_shape_and_order():
         "coverId": None,
         "firstPublishYear": None,
         "pages": None,
-        "subjects": [],
+        "description": None,
+        "publisher": None,
+        "editionYear": None,
     }
 
 
@@ -106,7 +109,7 @@ def test_category_tags_and_series_are_exported():
         {},
         generated_at=GENERATED,
     )
-    assert out["schemaVersion"] == 2
+    assert out["schemaVersion"] == 3
     assert out["reads"][0]["category"] == "read"
     assert out["reads"][0]["tags"] == ["fiction", "humour"]
     assert out["reads"][0]["series"] == "Why Mummy #2"
