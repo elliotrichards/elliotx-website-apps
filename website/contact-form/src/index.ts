@@ -15,6 +15,7 @@ function requireEnv(name: string): string {
 
 const port = Number(process.env.PORT) || 8080;
 const allowedOrigin = process.env.ALLOWED_ORIGIN || 'https://elliotx.com';
+const allowedHost = new URL(allowedOrigin).host;
 const turnstileSecret = requireEnv('TURNSTILE_SECRET_KEY');
 const turnstileHostname = process.env.TURNSTILE_HOSTNAME || undefined;
 const email = {
@@ -54,6 +55,18 @@ function clientIp(req: IncomingMessage): string | undefined {
   return hops.at(-2) || hops.at(-1) || req.socket.remoteAddress || undefined;
 }
 
+// The host the visitor addressed. The Google load balancer passes Host
+// through unchanged; Firebase Hosting calls the service on its *.run.app
+// host and puts the site's host in X-Forwarded-Host. A direct call to the
+// *.run.app URL carries neither as elliotx.com, so it's turned away here.
+// Both headers can be forged by a script, so this only filters casual
+// direct calls; Turnstile (checked against TURNSTILE_HOSTNAME) is the real
+// defence.
+function requestHost(req: IncomingMessage): string | undefined {
+  const forwarded = header(req, 'x-forwarded-host')?.split(',')[0]?.trim();
+  return (forwarded || header(req, 'host'))?.toLowerCase();
+}
+
 async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0;
   const chunks: Buffer[] = [];
@@ -78,7 +91,7 @@ const server = createServer(async (req, res) => {
     send(res, 405, { error: 'method not allowed' });
     return;
   }
-  if (req.headers.origin !== allowedOrigin) {
+  if (req.headers.origin !== allowedOrigin || requestHost(req) !== allowedHost) {
     send(res, 403, { error: 'forbidden' });
     return;
   }
