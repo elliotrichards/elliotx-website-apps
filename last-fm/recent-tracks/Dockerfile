@@ -14,7 +14,7 @@
 # check the runtime line. dependabot.yml ignores minor/major bumps of this
 # image for that reason (this regressed twice: #36, #41) — bump both FROM
 # lines together by hand when distroless moves to a new interpreter.
-FROM python:3.13-slim@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb AS builder
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS builder
 WORKDIR /app
 COPY requirements.txt ./
 # --target instead of a venv: the final stage has no python -m venv/activate
