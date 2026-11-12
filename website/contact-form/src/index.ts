@@ -92,6 +92,16 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.headers.origin !== allowedOrigin || requestHost(req) !== allowedHost) {
+    // Only header values the caller chose, no body or IP. Lets the logs show
+    // what a proxy (load balancer, Firebase Hosting) actually forwards.
+    console.warn(
+      JSON.stringify({
+        message: 'rejected: origin/host mismatch',
+        origin: header(req, 'origin') ?? null,
+        host: header(req, 'host') ?? null,
+        xForwardedHost: header(req, 'x-forwarded-host') ?? null,
+      }),
+    );
     send(res, 403, { error: 'forbidden' });
     return;
   }
