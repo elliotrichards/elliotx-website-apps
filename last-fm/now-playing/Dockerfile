@@ -24,7 +24,7 @@ RUN npm run build
 # (including one critical) had no patched image to bump to. debian13 is
 # the actively-rebuilt track (last rebuild: days old) and carries none of
 # those CVE IDs.
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:9fc11f6ee65993285c0fe3c4c9bbc4fd275fd4470572f58834ce490df91056e3
 WORKDIR /app
 ENV NODE_ENV=production
 # No runtime dependencies (built-in http + fetch only) — just the compiled output.
