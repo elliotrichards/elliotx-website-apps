@@ -38,20 +38,23 @@ function header(req: IncomingMessage, name: string): string | undefined {
   return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
 }
 
-// elliotx.com is proxied by Cloudflare, which sets CF-Connecting-IP to the
-// visitor's address (overwriting any client-supplied value). Without it,
-// fall back to the address the Google load balancer saw: it appends
-// "<peer>, <lb>" to X-Forwarded-For, so the peer is second from the end —
-// never the first entry, which the client controls. CF-Connecting-IP can
-// still be forged by bypassing Cloudflare and hitting the load balancer
-// directly, which only defeats the rate limit; Turnstile still applies.
+// The visitor's address, for the rate limit and Turnstile's remoteip.
+// elliotx.com is served by Firebase Hosting, which calls this service through
+// Cloud Run's front end. Each proxy appends the address it received the
+// request from to X-Forwarded-For, so the chain ends "<visitor>, <firebase>":
+// the last entry is Firebase's egress address (a Google IP, the same for
+// every visitor) and the one before it is the visitor. Anything earlier was
+// sent by the client and can be forged. CF-Connecting-IP isn't used: with
+// Cloudflare set to DNS only, any caller could set it to dodge the limit.
+// A caller hitting the *.run.app URL directly can still forge the
+// second-from-last entry, which only defeats the rate limit (the host check
+// turns most such calls away, and Turnstile still applies).
 function clientIp(req: IncomingMessage): string | undefined {
-  const cf = header(req, 'cf-connecting-ip');
-  if (cf) return cf;
   const hops =
     header(req, 'x-forwarded-for')
       ?.split(',')
-      .map((h) => h.trim()) ?? [];
+      .map((h) => h.trim())
+      .filter(Boolean) ?? [];
   return hops.at(-2) || hops.at(-1) || req.socket.remoteAddress || undefined;
 }
 
@@ -85,7 +88,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   // Same-origin only: the form is served from elliotx.com and posts back to
-  // elliotx.com/api/contact through the load balancer, so no CORS headers are
+  // elliotx.com/api/contact through Firebase Hosting, so no CORS headers are
   // sent and other sites' pages can't submit on a visitor's behalf.
   if (req.method !== 'POST') {
     send(res, 405, { error: 'method not allowed' });
@@ -100,6 +103,9 @@ const server = createServer(async (req, res) => {
         origin: header(req, 'origin') ?? null,
         host: header(req, 'host') ?? null,
         xForwardedHost: header(req, 'x-forwarded-host') ?? null,
+        // Hop count only, no addresses: shows the X-Forwarded-For layout
+        // the proxies produce without logging visitors' IPs.
+        xForwardedForHops: header(req, 'x-forwarded-for')?.split(',').length ?? 0,
       }),
     );
     send(res, 403, { error: 'forbidden' });
