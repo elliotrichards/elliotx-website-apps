@@ -32,7 +32,7 @@ ENV PYTHONPATH=/app/deps
 # "run failed:" lines in main.py never reach Cloud Logging.
 ENV PYTHONUNBUFFERED=1
 COPY --from=builder /app/deps ./deps
-COPY main.py ./
+COPY main.py listenbrainz.py ./
 EXPOSE 8080
 # Distroless's entrypoint is already `python3` — just pass the script.
 CMD ["main.py"]

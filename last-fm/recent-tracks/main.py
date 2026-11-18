@@ -3,12 +3,11 @@ import os
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import requests
 from google.cloud import bigquery
 
-API_KEY = os.environ["LASTFM_API_KEY"]
-LASTFM_USER = os.environ["LASTFM_USERNAME"]
-BASE_URL = "https://ws.audioscrobbler.com/2.0"
+import listenbrainz
+
+LISTENBRAINZ_USER = os.environ["LISTENBRAINZ_USER"]
 
 BQ_PROJECT = os.environ.get("BQ_PROJECT")  # falls back to the runtime SA's ADC project
 BQ_DATASET = os.environ.get("BQ_DATASET", "lastfm")
@@ -25,66 +24,24 @@ def yesterday_range_utc():
     return int(start.timestamp()), int(end.timestamp())
 
 
-def api_call(method, limit, y_start, y_end):
-    params = {
-        "method": method,
-        "api_key": API_KEY,
-        "format": "json",
-        "user": LASTFM_USER,
-        "from": y_start,
-        "to": y_end,
-        "limit": limit,
-    }
-
-    r = requests.get(BASE_URL, params=params, timeout=30)
-    r.raise_for_status()
-
-    data = r.json()
-    if "error" in data:
-        raise RuntimeError(f"Last.fm API error {data['error']}: {data.get('message')}")
-
-    return data
-
-
-def fetch_recent_tracks(limit=750):
+def fetch_recent_tracks():
     """
-    Fetches yesterday's (UTC) scrobbles. The API always includes the
-    currently-playing track (if any) as an extra leading entry regardless of
-    the from/to range — this filters that out, along with anything outside
-    the requested day or missing a timestamp.
+    Yesterday's (UTC) listens from ListenBrainz, newest first. Unlike
+    last.fm's getRecentTracks, ListenBrainz's /listens never includes the
+    playing-now track, so there's nothing extra to filter out.
     """
     y_start, y_end = yesterday_range_utc()
-    data = api_call("user.getRecentTracks", limit, y_start, y_end)
-    tracks = data["recenttracks"]["track"]
+    listens = listenbrainz.fetch_listens(LISTENBRAINZ_USER, y_start, y_end)
 
-    cleaned = []
-    for t in tracks:
-        if "@attr" in t and t["@attr"].get("nowplaying") == "true":
-            continue
-        if "date" not in t:
-            continue
+    written_at = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for rank, listen in enumerate(listens, start=1):
+        row = listenbrainz.to_row(listen)
+        row["timestamp"] = written_at
+        row["rank"] = rank
+        rows.append(row)
 
-        uts = int(t["date"]["uts"])
-        if uts < y_start or uts > y_end:
-            continue
-
-        cleaned.append(
-            {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "scrobble_uts": uts,
-                "scrobble_datetime": datetime.fromtimestamp(uts, tz=timezone.utc).isoformat(),
-                "rank": len(cleaned) + 1,
-                "artist_name": t["artist"]["#text"],
-                "track_name": t["name"],
-                "album_name": t.get("album", {}).get("#text", ""),
-                "artist_mbid": t["artist"].get("mbid", ""),
-                "track_mbid": t.get("mbid", ""),
-                "album_mbid": t.get("album", {}).get("mbid", ""),
-                "url": t["url"],
-            }
-        )
-
-    return cleaned
+    return rows
 
 
 def append_to_bigquery(rows):

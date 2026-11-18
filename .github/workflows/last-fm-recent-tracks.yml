@@ -29,7 +29,7 @@ jobs:
       - run: docker build -t recent-tracks:pr last-fm/recent-tracks
       # Importing the deps (not main.py, which needs runtime env vars)
       # loads every compiled extension against the runtime interpreter.
-      - run: docker run --rm recent-tracks:pr -c "import _cffi_backend, google.cloud.bigquery, requests"
+      - run: docker run --rm recent-tracks:pr -c "import _cffi_backend, google.cloud.bigquery, requests, listenbrainz"
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
