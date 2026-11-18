@@ -2,7 +2,7 @@ name: Lint app
 
 # Reusable workflow: format check, lint, typecheck, and a dependency
 # vulnerability audit for one app. Called by each app's own caller workflow
-# on pull requests — see last-fm-now-playing.yml.
+# on pull requests — see website-contact-form.yml.
 on:
   workflow_call:
     inputs:
