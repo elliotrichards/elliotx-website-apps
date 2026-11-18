@@ -2,7 +2,7 @@ name: Deploy app
 
 # Reusable workflow: build+push an image to GAR via WIF, deploy it to Cloud
 # Run. Adding a new app means adding a thin caller workflow with its own
-# inputs, not duplicating these steps — see last-fm-now-playing.yml.
+# inputs, not duplicating these steps — see website-contact-form.yml.
 on:
   workflow_call:
     inputs:

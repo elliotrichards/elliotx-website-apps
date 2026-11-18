@@ -1,5 +1,5 @@
 # Pinned by digest, not just the floating :3.13-slim tag — see the
-# now-playing Dockerfile for why (nondeterministic scans otherwise).
+# contact-form Dockerfile for why (nondeterministic scans otherwise).
 # Dependabot's docker ecosystem entry (../../.github/dependabot.yml)
 # proposes digest bumps on its own schedule.
 #
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 # Distroless, not python:3.13-slim: no pip/shell/package manager in the
 # runtime image, so nothing to patch there that isn't actually used at
 # runtime. :nonroot runs as a non-root UID. debian13 track, matching the
-# now-playing image, for the same actively-rebuilt-base reasoning.
+# contact-form image, for the same actively-rebuilt-base reasoning.
 FROM gcr.io/distroless/python3-debian13:nonroot@sha256:c3ed2b61f3c4e410685565ceb3c818197b552832521b39d53eca5d2d9d0dc1e1
 WORKDIR /app
 ENV PYTHONPATH=/app/deps

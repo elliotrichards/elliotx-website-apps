@@ -2,7 +2,7 @@ version: 2
 updates:
   # One entry per app — add a new one here alongside each new app folder.
   - package-ecosystem: npm
-    directory: /last-fm/now-playing
+    directory: /website/contact-form
     schedule:
       interval: weekly
     groups:
@@ -11,24 +11,6 @@ updates:
     # TypeScript 7 is outside typescript-eslint's peer range (<6.1.0 as of
     # 8.71.1), which breaks `npm ci` with ERESOLVE (#44). Lift this once
     # typescript-eslint supports TS 7.
-    ignore:
-      - dependency-name: typescript
-        update-types:
-          - version-update:semver-major
-
-  - package-ecosystem: docker
-    directory: /last-fm/now-playing
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: npm
-    directory: /website/contact-form
-    schedule:
-      interval: weekly
-    groups:
-      dev-dependencies:
-        dependency-type: development
-    # Same TypeScript 7 / typescript-eslint peer-range hold as now-playing.
     ignore:
       - dependency-name: typescript
         update-types:
