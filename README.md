@@ -132,22 +132,28 @@ docker run -p 8080:8080 -e LASTFM_API_KEY=... -e LASTFM_USERNAME=... now-playing
 
 ## `last-fm/recent-tracks`
 
-A daily batch job, not an HTTP API for site visitors: pulls yesterday's (UTC) last.fm scrobbles once a day and appends them to a BigQuery table (`lastfm.recent_tracks`) for later analysis. Plain Python, stdlib `http.server` for the single route plus `requests` and `google-cloud-bigquery` — same "no framework where the stdlib does the job" approach as `now-playing`'s bare `node:http` server.
+A daily batch job, not an HTTP API for site visitors: pulls yesterday's (UTC) listens from [ListenBrainz](https://listenbrainz.org) once a day and appends them to a BigQuery table (`lastfm.recent_tracks`) that the site's `/data/music` dashboard is built from. Plain Python, stdlib `http.server` for the single route plus `requests` and `google-cloud-bigquery`.
 
-Same deploy pattern as `now-playing` (WIF, Docker build in CI, Cloud Run, Secret Manager `secret_key_ref`), with two differences:
+Until November 2026 this pulled from last.fm's `user.getRecentTracks`; last.fm's API went paid on 2026-12-01. The folder, Cloud Run service, dataset and table keep their `lastfm` names (BigQuery can't rename a dataset), and everything before the switch-over is still last.fm data. The `source` column says which service a row came from: `listenbrainz`, or `NULL` for last.fm. Rows from both use the same names as the player submitted them, so charts run straight across the join.
 
-- **Trigger**: no public traffic. Cloud Scheduler (`elliotx-website-terraform/last-fm-recent-tracks`) hits the service once a day at 06:00 in `Europe/London` (Cloud Scheduler applies the BST/GMT offset itself — no manual UTC math), authenticated with a short-lived OIDC token from a dedicated invoker service account. The service itself sets `allow_unauthenticated = false`, so nothing else can call it.
-- **Secret reuse**: shares the same `lastfm-api-key` Secret Manager secret as `now-playing` (same last.fm account) rather than provisioning a second one — the secret's _container_ is still owned by `now-playing`'s Terraform state; this app's state only adds an IAM accessor grant on it.
+- **Trigger**: no public traffic. Cloud Scheduler (`elliotx-website-terraform/last-fm-recent-tracks`) hits the service once a day at 06:00 in `Europe/London` (Cloud Scheduler applies the BST/GMT offset itself), authenticated with a short-lived OIDC token from a dedicated invoker service account. The service sets `allow_unauthenticated = false`, so nothing else can call it.
+- **No secret needed**: ListenBrainz listens are public, so the daily job calls the API without a token. `LISTENBRAINZ_TOKEN` is optional and only raises the rate limit, which is worth setting for `backfill.py`.
 
 ```
 Cloud Scheduler (06:00 Europe/London)
   --POST, OIDC token-->  Cloud Run service (lastfm-recent-tracks, private)
-                            --secret_key_ref-->  Secret Manager (lastfm-api-key, shared)
-                            --user.getrecenttracks-->  last.fm API
+                            --GET /1/user/{user}/listens-->  ListenBrainz API
                             --insert_rows_json-->  BigQuery (lastfm.recent_tracks)
 ```
 
-Environment variables: `LASTFM_API_KEY` (secret), `LASTFM_USERNAME`, `BQ_DATASET`, `BQ_TABLE` (all plain env vars set via Terraform), `PORT` (set by Cloud Run).
+Environment variables: `LISTENBRAINZ_USER`, `BQ_DATASET`, `BQ_TABLE` (plain env vars set via Terraform), `PORT` (set by Cloud Run).
+
+Files:
+
+- `listenbrainz.py` — API client and the listen → row mapping, shared by the scripts below.
+- `main.py` — the deployed job.
+- `backfill.py` — not deployed. Loads a date range from ListenBrainz, skipping rows already present: `LISTENBRAINZ_USER=... python backfill.py 2026-11-28 2026-11-30 [--dry-run]`. Needs your own `gcloud auth application-default login`.
+- `compare.py` — not deployed, read-only. Compares ListenBrainz with the last.fm rows in BigQuery day by day; used to check the two agreed before switching over.
 
 No `lint-app.yml` job for this one — that workflow is Node-specific (ESLint/Prettier/tsc), and this app has no equivalent tooling wired up. The Trivy image scan in `deploy-app.yml` and the CodeQL Python analysis still cover it.
 
