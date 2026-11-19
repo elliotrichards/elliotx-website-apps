@@ -27,10 +27,28 @@ def _headers():
     return {"Authorization": f"Token {token}"} if token else {}
 
 
-def _get(path, params, max_retries=5):
-    """GET with retries on 429 (honouring X-RateLimit-Reset-In) and 5xx."""
+# (connect, read) seconds. Sized with MAX_RETRIES so a run that times out on
+# every attempt still finishes inside Cloud Scheduler's default 180s attempt
+# deadline: 4 x 35s + 2 + 4 + 8s of backoff = 154s. Scheduler then retries
+# the whole run (retry_count = 3 in the Terraform).
+TIMEOUT = (10, 25)
+MAX_RETRIES = 4
+
+
+def _get(path, params, max_retries=MAX_RETRIES):
+    """GET with retries on timeouts and dropped connections (seen from
+    api.listenbrainz.org on 2026-11-19), 429 (honouring
+    X-RateLimit-Reset-In) and 5xx."""
     for attempt in range(max_retries):
-        r = requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(), timeout=30)
+        try:
+            r = requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(), timeout=TIMEOUT)
+        except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as exc:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** (attempt + 1)
+            print(f"ListenBrainz {type(exc).__name__} on {path}, retrying in {wait}s", file=sys.stderr)
+            time.sleep(wait)
+            continue
         if r.status_code == 429 or r.status_code >= 500:
             if attempt == max_retries - 1:
                 r.raise_for_status()
